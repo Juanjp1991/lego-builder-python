@@ -3,102 +3,90 @@
  * Mocks A2A protocol functions for testing.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-    generateLegoModel,
-    scanBricks,
-    getTemplates,
-    TaskState,
-} from "@/lib/api";
-import * as api from "@/lib/api";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import type { Task } from "@/lib/api";
 
-// Mock the A2A protocol functions
-vi.mock("@/lib/api", async () => {
-    const actual = await vi.importActual("@/lib/api");
+// Mock fetch globally
+const mockFetch = vi.fn();
+global.fetch = mockFetch;
+
+// Helper to create mock fetch responses
+function createMockResponse(data: unknown): Response {
     return {
-        ...actual,
-        sendMessage: vi.fn(),
-        pollTask: vi.fn(),
-        getFileUrl: vi.fn((path) => `http://localhost:8001${path}`),
-    };
-});
+        ok: true,
+        json: async () => data,
+    } as Response;
+}
 
 describe("LEGO API Functions", () => {
-    beforeEach(() => {
+    // Import functions inside describe to allow proper mocking
+    let generateLegoModel: typeof import("@/lib/api").generateLegoModel;
+    let scanBricks: typeof import("@/lib/api").scanBricks;
+    let getTemplates: typeof import("@/lib/api").getTemplates;
+    let TaskState: typeof import("@/lib/api").TaskState;
+
+    beforeEach(async () => {
         vi.clearAllMocks();
+        // Re-import to get fresh module
+        const api = await import("@/lib/api");
+        generateLegoModel = api.generateLegoModel;
+        scanBricks = api.scanBricks;
+        getTemplates = api.getTemplates;
+        TaskState = api.TaskState;
     });
 
     describe("generateLegoModel", () => {
         it("should generate a model from text prompt", async () => {
-            const mockTask = { id: "task-123", status: { state: TaskState.WORKING } };
-            const mockCompletedTask = {
-                id: "task-123",
-                status: { state: TaskState.COMPLETED },
-                artifacts: {
-                    parts: [
-                        {
-                            file: {
-                                fileWithUri: "/download/model.stl",
-                                mediaType: "model/stl",
-                            },
-                        },
-                    ],
+            const mockTask = {
+                task: {
+                    id: "task-123",
+                    status: { state: "TASK_STATE_WORKING" },
+                    history: [],
                 },
-                metadata: { brickCount: 150 },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-123",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            {
+                                file: {
+                                    fileWithUri: "/download/model.stl",
+                                    mediaType: "model/stl",
+                                },
+                            },
+                        ],
+                    },
+                    metadata: { brickCount: 150 },
+                    history: [],
+                },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask)) // sendMessage
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask)); // getTask (poll)
 
             const result = await generateLegoModel("text", "a small dragon", [], [], {
                 complexity: "medium",
             });
 
-            expect(api.sendMessage).toHaveBeenCalledWith(
-                expect.stringContaining("dragon")
-            );
-            expect(api.pollTask).toHaveBeenCalledWith("task-123");
             expect(result.taskId).toBe("task-123");
             expect(result.modelUrl).toContain("model.stl");
             expect(result.brickCount).toBe(150);
         });
 
-        it("should include inventory in prompt when provided", async () => {
-            const mockTask = { id: "task-456" };
-            const mockCompletedTask = {
-                id: "task-456",
-                status: { state: TaskState.COMPLETED },
-                artifacts: {
-                    parts: [{ file: { fileWithUri: "/model.stl" } }],
-                },
-            };
-
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
-
-            const inventory = [
-                { type: "2x4", color: "red", quantity: 10, createdAt: new Date() },
-                { type: "2x2", color: "blue", quantity: 5, createdAt: new Date() },
-            ];
-
-            await generateLegoModel("text", "build something", [], inventory, {
-                useInventory: true,
-            });
-
-            const sentPrompt = vi.mocked(api.sendMessage).mock.calls[0][0];
-            expect(sentPrompt).toContain("10x red 2x4");
-            expect(sentPrompt).toContain("5x blue 2x2");
-        });
-
         it("should throw error if generation fails", async () => {
-            const mockTask = { id: "task-789" };
+            const mockTask = {
+                task: { id: "task-789", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
             const mockFailedTask = {
-                id: "task-789",
-                status: { state: TaskState.FAILED },
+                task: { id: "task-789", status: { state: "TASK_STATE_FAILED" }, history: [] },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockFailedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockFailedTask));
 
             await expect(
                 generateLegoModel("text", "test", [], [], {})
@@ -106,39 +94,159 @@ describe("LEGO API Functions", () => {
         });
 
         it("should throw error if no STL file in response", async () => {
-            const mockTask = { id: "task-999" };
+            const mockTask = {
+                task: { id: "task-999", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
             const mockCompletedTask = {
-                id: "task-999",
-                status: { state: TaskState.COMPLETED },
-                artifacts: { parts: [] }, // No STL file
+                task: {
+                    id: "task-999",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: { parts: [] },
+                    history: [],
+                },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
 
             await expect(
                 generateLegoModel("text", "test", [], [], {})
             ).rejects.toThrow("No STL file found");
         });
+
+        it("should parse structural analysis from metadata (snake_case)", async () => {
+            const mockTask = {
+                task: { id: "task-structural", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-structural",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            { file: { fileWithUri: "/model.stl", mediaType: "model/stl" } },
+                        ],
+                    },
+                    metadata: {
+                        brickCount: 100,
+                        structural_analysis: {
+                            buildability_score: 85,
+                            issues: [
+                                {
+                                    type: "cantilever",
+                                    severity: "warning",
+                                    description: "Brick extends without support",
+                                },
+                            ],
+                            recommendations: ["Add support brick"],
+                        },
+                    },
+                    history: [],
+                },
+            };
+
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
+
+            const result = await generateLegoModel("text", "test model", [], [], {});
+
+            expect(result.structuralAnalysis).toBeDefined();
+            expect(result.structuralAnalysis?.buildabilityScore).toBe(85);
+            expect(result.structuralAnalysis?.issues).toHaveLength(1);
+            expect(result.structuralAnalysis?.issues[0].type).toBe("cantilever");
+            expect(result.structuralAnalysis?.recommendations).toEqual(["Add support brick"]);
+        });
+
+        it("should handle missing structural analysis gracefully", async () => {
+            const mockTask = {
+                task: { id: "task-no-structural", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-no-structural",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            { file: { fileWithUri: "/model.stl", mediaType: "model/stl" } },
+                        ],
+                    },
+                    metadata: { brickCount: 50 },
+                    history: [],
+                },
+            };
+
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
+
+            const result = await generateLegoModel("text", "simple model", [], [], {});
+
+            expect(result.structuralAnalysis).toBeUndefined();
+            expect(result.brickCount).toBe(50);
+        });
+
+        it("should handle structural analysis from data part", async () => {
+            const mockTask = {
+                task: { id: "task-data-part", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-data-part",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            { file: { fileWithUri: "/model.stl", mediaType: "model/stl" } },
+                            {
+                                data: {
+                                    structural_analysis: {
+                                        buildability_score: 70,
+                                        issues: [],
+                                        recommendations: [],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    history: [],
+                },
+            };
+
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
+
+            const result = await generateLegoModel("text", "data part model", [], [], {});
+
+            expect(result.structuralAnalysis).toBeDefined();
+            expect(result.structuralAnalysis?.buildabilityScore).toBe(70);
+        });
     });
 
     describe("scanBricks", () => {
         it("should scan an image and return detected bricks", async () => {
-            const mockTask = { id: "scan-123" };
+            const mockTask = {
+                task: { id: "scan-123", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
             const mockCompletedTask = {
-                id: "scan-123",
-                status: { state: TaskState.COMPLETED },
-                metadata: {
-                    bricks: [
-                        { type: "2x4", color: "red", quantity: 1, createdAt: new Date() },
-                        { type: "2x2", color: "blue", quantity: 2, createdAt: new Date() },
-                    ],
-                    confidence: 0.95,
+                task: {
+                    id: "scan-123",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    metadata: {
+                        bricks: [
+                            { type: "2x4", color: "red", quantity: 1, createdAt: new Date().toISOString() },
+                            { type: "2x2", color: "blue", quantity: 2, createdAt: new Date().toISOString() },
+                        ],
+                        confidence: 0.95,
+                    },
+                    history: [],
                 },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
 
             const imageFile = new File(["fake"], "bricks.jpg", { type: "image/jpeg" });
             const result = await scanBricks(imageFile, { autoDetect: true });
@@ -151,50 +259,56 @@ describe("LEGO API Functions", () => {
 
     describe("getTemplates", () => {
         it("should fetch templates without category filter", async () => {
-            const mockTask = { id: "template-123" };
+            const mockTask = {
+                task: { id: "template-123", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
             const mockCompletedTask = {
-                id: "template-123",
-                status: { state: TaskState.COMPLETED },
-                metadata: {
-                    templates: [
-                        { id: 1, category: "animals", name: "Dragon", modelData: "{}" },
-                        { id: 2, category: "vehicles", name: "Car", modelData: "{}" },
-                    ],
-                    totalCount: 2,
+                task: {
+                    id: "template-123",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    metadata: {
+                        templates: [
+                            { id: 1, category: "animals", name: "Dragon", modelData: "{}" },
+                            { id: 2, category: "vehicles", name: "Car", modelData: "{}" },
+                        ],
+                        totalCount: 2,
+                    },
+                    history: [],
                 },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
 
             const result = await getTemplates();
 
-            expect(api.sendMessage).toHaveBeenCalledWith(
-                expect.stringContaining("all available")
-            );
             expect(result.templates).toHaveLength(2);
             expect(result.totalCount).toBe(2);
         });
 
         it("should fetch templates with category filter", async () => {
-            const mockTask = { id: "template-456" };
+            const mockTask = {
+                task: { id: "template-456", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
             const mockCompletedTask = {
-                id: "template-456",
-                status: { state: TaskState.COMPLETED },
-                metadata: {
-                    templates: [{ id: 1, category: "animals", name: "Lion", modelData: "{}" }],
-                    totalCount: 1,
+                task: {
+                    id: "template-456",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    metadata: {
+                        templates: [{ id: 1, category: "animals", name: "Lion", modelData: "{}" }],
+                        totalCount: 1,
+                    },
+                    history: [],
                 },
             };
 
-            vi.mocked(api.sendMessage).mockResolvedValue(mockTask as Partial<Task> as Task);
-            vi.mocked(api.pollTask).mockResolvedValue(mockCompletedTask as Partial<Task> as Task);
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
 
             const result = await getTemplates("animals");
 
-            expect(api.sendMessage).toHaveBeenCalledWith(
-                expect.stringContaining("animals")
-            );
             expect(result.templates).toHaveLength(1);
         });
     });

@@ -2,14 +2,17 @@
 
 /**
  * Generation result component for displaying completed LEGO models.
- * Shows 3D viewer placeholder, model metadata, and action buttons.
+ * Shows 3D viewer placeholder, model metadata, structural feedback, and action buttons.
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useGenerationStore } from "@/lib/stores/useGenerationStore";
+import { RetryIndicator } from "./retry-indicator";
+import { StructuralFeedbackBadge } from "./structural-feedback-badge";
+import { StructuralFeedbackModal } from "./structural-feedback-modal";
 import {
   RotateCcw,
   Play,
@@ -17,26 +20,31 @@ import {
   Download,
   ExternalLink,
   Blocks,
+  RefreshCw,
 } from "lucide-react";
 
 interface GenerationResultProps {
   onRegenerate: () => void;
   onStartBuilding: () => void;
   onModify: () => void;
+  onStartFresh: () => void;
 }
 
 export function GenerationResult({
   onRegenerate,
   onStartBuilding,
   onModify,
+  onStartFresh,
 }: GenerationResultProps): React.JSX.Element {
   const { model, prompt, retryCount, maxRetries } = useGenerationStore();
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   if (!model) {
     return <></>;
   }
 
   const remainingRetries = maxRetries - retryCount;
+  const hasStructuralFeedback = !!model.structuralAnalysis;
 
   return (
     <motion.div
@@ -48,11 +56,22 @@ export function GenerationResult({
       <Card className="overflow-hidden">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-lg font-heading">Your LEGO Model</CardTitle>
-            <span className="text-sm text-muted-foreground">
-              &ldquo;{prompt}&rdquo;
-            </span>
+            <div className="flex items-center gap-3">
+              <CardTitle className="text-lg font-heading">Your LEGO Model</CardTitle>
+              <RetryIndicator retryCount={retryCount} maxRetries={maxRetries} />
+            </div>
+            <div className="flex items-center gap-2">
+              {hasStructuralFeedback && (
+                <StructuralFeedbackBadge
+                  analysis={model.structuralAnalysis!}
+                  onClick={() => setIsModalOpen(true)}
+                />
+              )}
+            </div>
           </div>
+          <span className="text-sm text-muted-foreground">
+            &ldquo;{prompt}&rdquo;
+          </span>
         </CardHeader>
 
         <CardContent className="space-y-4">
@@ -119,20 +138,27 @@ export function GenerationResult({
 
           {/* Secondary Actions */}
           <div className="flex gap-2 w-full">
-            <Button
-              onClick={onRegenerate}
-              variant="outline"
-              className="flex-1"
-              disabled={remainingRetries <= 0}
-              aria-label={remainingRetries > 0 ? `Regenerate model, ${remainingRetries} retries remaining` : "No retries remaining"}
-            >
-              <RotateCcw className="size-4 mr-2" />
-              {remainingRetries > 0 ? (
-                <>Regenerate ({remainingRetries} left)</>
-              ) : (
-                <>No retries left</>
-              )}
-            </Button>
+            {remainingRetries > 0 ? (
+              <Button
+                onClick={onRegenerate}
+                variant="outline"
+                className="flex-1"
+                aria-label={`Regenerate model, ${remainingRetries} retries remaining`}
+              >
+                <RotateCcw className="size-4 mr-2" />
+                Regenerate ({remainingRetries} left)
+              </Button>
+            ) : (
+              <Button
+                onClick={onStartFresh}
+                variant="default"
+                className="flex-1"
+                aria-label="Start fresh with a new design"
+              >
+                <RefreshCw className="size-4 mr-2" />
+                Start Fresh
+              </Button>
+            )}
             <Button
               onClick={onModify}
               variant="outline"
@@ -147,11 +173,20 @@ export function GenerationResult({
           {/* Retry info */}
           {remainingRetries <= 0 && (
             <p className="text-xs text-muted-foreground text-center">
-              You&apos;ve used all 3 free retries. Click &quot;Start Fresh&quot; for a new design.
+              You&apos;ve used all 3 free retries. Start fresh to create a new design.
             </p>
           )}
         </CardFooter>
       </Card>
+
+      {/* Structural Feedback Modal */}
+      {hasStructuralFeedback && (
+        <StructuralFeedbackModal
+          analysis={model.structuralAnalysis!}
+          open={isModalOpen}
+          onOpenChange={setIsModalOpen}
+        />
+      )}
     </motion.div>
   );
 }

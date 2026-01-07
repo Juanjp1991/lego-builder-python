@@ -62,6 +62,45 @@ export interface GenerationCacheEntry {
 }
 
 // ===========================
+// STRUCTURAL ANALYSIS INTERFACES
+// ===========================
+
+/**
+ * Types of structural issues that can be detected in a LEGO model.
+ */
+export type StructuralIssueType =
+  | "weak_base"
+  | "cantilever"
+  | "floating_brick"
+  | "unstable_joint"
+  | "other";
+
+/**
+ * Severity levels for structural issues.
+ */
+export type StructuralIssueSeverity = "warning" | "error";
+
+/**
+ * Represents a structural issue detected in a LEGO model.
+ */
+export interface StructuralIssue {
+  type: StructuralIssueType;
+  severity: StructuralIssueSeverity;
+  description: string;
+  location?: string; // Optional: "Layer 3, brick at (2,4)"
+}
+
+/**
+ * Structural analysis metadata for a generated LEGO model.
+ * Includes buildability score, issues, and recommendations.
+ */
+export interface StructuralAnalysis {
+  buildabilityScore: number; // 0-100
+  issues: StructuralIssue[];
+  recommendations: string[];
+}
+
+// ===========================
 // API FUNCTION INTERFACES
 // ===========================
 
@@ -78,10 +117,11 @@ export interface GenerateOptions {
  * Response from generateLegoModel API function.
  */
 export interface GeneratedModel {
-    taskId: string; // A2A task ID
-    modelUrl: string; // URL to download STL file
-    stlData?: string; // Optional STL file content
-    brickCount?: number; // Estimated number of bricks
+  taskId: string; // A2A task ID
+  modelUrl: string; // URL to download STL file
+  stlData?: string; // Optional STL file content
+  brickCount?: number; // Estimated number of bricks
+  structuralAnalysis?: StructuralAnalysis; // Optional structural feedback from backend
 }
 
 /**

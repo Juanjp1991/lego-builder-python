@@ -183,7 +183,66 @@ import type {
   ScanOptions,
   ScannedBricks,
   TemplateList,
+  StructuralAnalysis,
+  StructuralIssue,
 } from "@/lib/types";
+
+// ===============================================
+// HELPER FUNCTIONS
+// ===============================================
+
+/**
+ * Raw structural analysis from backend (snake_case).
+ */
+interface RawStructuralAnalysis {
+  buildability_score?: number;
+  issues?: Array<{
+    type: string;
+    severity: string;
+    description: string;
+    location?: string;
+  }>;
+  recommendations?: string[];
+}
+
+/**
+ * Parses structural analysis from backend response (snake_case to camelCase).
+ * Returns undefined if no structural analysis found.
+ */
+function parseStructuralAnalysis(
+  metadata?: Record<string, unknown>,
+  artifactParts?: Part[]
+): StructuralAnalysis | undefined {
+  // Try metadata first (primary source)
+  let rawAnalysis: RawStructuralAnalysis | undefined = metadata?.structural_analysis as RawStructuralAnalysis | undefined;
+
+  // Try artifact data parts if not in metadata
+  if (!rawAnalysis && artifactParts) {
+    const dataPart = artifactParts.find(
+      (p) => p.data && (p.data as Record<string, unknown>).structural_analysis
+    );
+    if (dataPart?.data) {
+      rawAnalysis = (dataPart.data as Record<string, unknown>).structural_analysis as RawStructuralAnalysis;
+    }
+  }
+
+  // If no raw analysis found, return undefined
+  if (!rawAnalysis || typeof rawAnalysis.buildability_score !== "number") {
+    return undefined;
+  }
+
+  // Convert snake_case to camelCase
+  return {
+    buildabilityScore: rawAnalysis.buildability_score,
+    issues: (rawAnalysis.issues || []).map((issue) => ({
+      type: issue.type as StructuralIssue["type"],
+      severity: issue.severity as StructuralIssue["severity"],
+      description: issue.description,
+      location: issue.location,
+    })),
+    recommendations: rawAnalysis.recommendations || [],
+  };
+}
 
 /**
  * Sends a message with images using multipart/form-data.
@@ -298,10 +357,17 @@ export async function generateLegoModel(
   // Extract brick count from metadata if available
   const brickCount = completedTask.metadata?.brickCount as number | undefined;
 
+  // Parse structural analysis from metadata or artifact data parts
+  const structuralAnalysis = parseStructuralAnalysis(
+    completedTask.metadata as Record<string, unknown> | undefined,
+    completedTask.artifacts?.parts
+  );
+
   return {
     taskId: completedTask.id,
     modelUrl,
     brickCount,
+    structuralAnalysis,
   };
 }
 

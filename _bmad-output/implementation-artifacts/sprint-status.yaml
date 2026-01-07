@@ -52,7 +52,7 @@ development_status:
   2-1-text-to-lego-generation-with-progress-storytelling: done
   2-2-multi-image-upload-image-to-lego-generation: done
   2-3-3d-model-viewer-with-touch-controls-react-three-fiber: done
-  2-4-free-retry-mechanism-structural-feedback: backlog
+  2-4-free-retry-mechanism-structural-feedback: done
   2-5-first-build-guarantee-user-profiling: backlog
   2-6-generation-error-handling-recovery: backlog
   2-7-iterative-model-modification: backlog

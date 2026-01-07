@@ -403,6 +403,7 @@ export default function GeneratePage(): React.JSX.Element {
                   onRegenerate={handleRegenerate}
                   onStartBuilding={handleStartBuilding}
                   onModify={handleModify}
+                  onStartFresh={handleStartFresh}
                 />
               </motion.div>
             )}
