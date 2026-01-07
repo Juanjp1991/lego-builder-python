@@ -5,9 +5,10 @@ and agent capabilities used in the A2A communication.
 """
 
 from enum import Enum
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
+
 
 def to_camel(string: str) -> str:
     return "".join(word.capitalize() if i > 0 else word for i, word in enumerate(string.split("_")))
@@ -31,10 +32,18 @@ class TaskState(str, Enum):
     REJECTED = "TASK_STATE_REJECTED"
     AUTH_REQUIRED = "TASK_STATE_AUTH_REQUIRED"
 
+
 class Role(str, Enum):
     UNSPECIFIED = "ROLE_UNSPECIFIED"
     USER = "ROLE_USER"
     AGENT = "ROLE_AGENT"
+
+
+class MessageType(str, Enum):
+    """Type of message/request being sent to the agent."""
+    TEXT_TO_LEGO = "text_to_lego"
+    IMAGE_TO_LEGO = "image_to_lego"
+    MODIFY_LEGO_MODEL = "modify_lego_model"
 
 # Parts
 class FilePart(A2ABaseModel):
@@ -104,13 +113,41 @@ class Task(A2ABaseModel):
     history: List[Message] = Field(default_factory=list)
     metadata: Optional[Dict[str, Any]] = None
 
+# Brick model for inventory
+class Brick(A2ABaseModel):
+    """Represents a LEGO brick in the user's inventory."""
+    size: str  # e.g., "2x4", "2x2", "1x1"
+    color: str  # e.g., "red", "blue", "white"
+    count: int = 1
+
+
+# Modification request data
+class ModificationData(A2ABaseModel):
+    """Data required for modifying an existing LEGO model."""
+    base_model_id: Optional[int] = None  # ID of the original model
+    base_code: str  # Original build123d code
+    modification_prompt: str  # "make it taller", "add wings", etc.
+    inventory: Optional[List[Brick]] = None  # User's available bricks
+
+
 # Requests
 class SendMessageConfiguration(A2ABaseModel):
     accepted_output_modes: Optional[List[str]] = None
 
+
 class SendMessageRequest(A2ABaseModel):
+    """Request to send a message to the agent.
+
+    Attributes:
+        message (Message): The message containing parts and metadata.
+        configuration (Optional[SendMessageConfiguration]): Optional configuration.
+        message_type (MessageType): Type of request (generation or modification).
+        modification_data (Optional[ModificationData]): Required for modification requests.
+    """
     message: Message
     configuration: Optional[SendMessageConfiguration] = None
+    message_type: MessageType = MessageType.TEXT_TO_LEGO
+    modification_data: Optional[ModificationData] = None
 
 # Agent Card
 class AgentCard(A2ABaseModel):

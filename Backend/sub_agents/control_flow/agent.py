@@ -1,7 +1,7 @@
 """Control Flow Agent module.
 
 This module defines the ControlFlowAgent, which orchestrates the interaction
-between the Designer and Coder agents to generate 3D models.
+between the Designer and Coder agents to generate and modify 3D models.
 """
 
 import re
@@ -13,16 +13,14 @@ from google.genai.types import Content, Part
 
 import logging
 from sub_agents.designer.agent import get_designer_agent
-from sub_agents.coder.agent import get_coder_agent
-from sub_agents.designer.agent import get_designer_agent
-from sub_agents.coder.agent import get_coder_agent
+from sub_agents.coder.agent import get_coder_agent, CodeModifier
 from tools.renderer import render_stl
 from tools.cad_tools import create_cad_model
 
 logger = logging.getLogger(__name__)
 
 class ControlFlowAgent:
-    """Orchestrates the multi-agent workflow for 3D model generation.
+    """Orchestrates the multi-agent workflow for 3D model generation and modification.
 
     Attributes:
         app_name (str): The name of the application.
@@ -30,6 +28,7 @@ class ControlFlowAgent:
         memory_service: Service for managing agent memory.
         designer_agent: The initialized Designer Agent.
         coder_agent: The initialized Coder Agent.
+        code_modifier: The CodeModifier instance for handling modifications.
     """
 
     def __init__(self, session_service: InMemorySessionService, memory_service: InMemoryMemoryService):
@@ -42,10 +41,11 @@ class ControlFlowAgent:
         self.app_name = "forma-ai-service"
         self.session_service = session_service
         self.memory_service = memory_service
-        
+
         # Initialize sub-agents
         self.designer_agent = get_designer_agent()
         self.coder_agent = get_coder_agent()
+        self.code_modifier = CodeModifier()
 
     async def _ensure_session(self, session_id: str, user_id: str) -> None:
         """Ensures a session exists for the user.
@@ -150,31 +150,24 @@ class ControlFlowAgent:
         """
         # Extract STL path
         stl_match = re.search(r"outputs/[\w-]+\.stl", coder_output)
-        
+
         if stl_match:
             return stl_match.group(0), None
-            
-        if stl_match:
-            return stl_match.group(0), None
-            
+
         logger.info("ControlFlow: No STL file found in output. Checking for code block...")
         # Fallback: Check if code was outputted in markdown
         code_match = re.search(r"```python(.*?)```", coder_output, re.DOTALL)
         if code_match:
             logger.info("ControlFlow: Found code block. Executing fallback generation...")
             code = code_match.group(1).strip()
-            logger.info("ControlFlow: Found code block. Executing fallback generation...")
-            code = code_match.group(1).strip()
             result = create_cad_model(code)
             if result["success"]:
                 logger.info(f"ControlFlow: Fallback generation successful. Files: {result['files']}")
-                # We need to find the STL in the new result
-                # The result['files'] is a dict {'step': ..., 'stl': ...}
                 return result['files']['stl'], None
             else:
                 logger.error(f"ControlFlow: Fallback generation failed: {result['error']}")
                 return None, result['error']
-        
+
         return None, "No code block or STL file found."
 
     async def _get_designer_feedback(self, png_path: str, original_spec: str, user_id: str, session_id: str) -> str:
@@ -335,3 +328,187 @@ class ControlFlowAgent:
         
         # If loop finishes without approval
         yield "I'm sorry, I was unable to generate the model correctly after multiple attempts.\n"
+
+    async def _run_modifier_step(
+        self,
+        existing_code: str,
+        modification_prompt: str,
+        user_id: str,
+        session_id: str,
+        result_container: dict[str, str]
+    ) -> AsyncGenerator[str, None]:
+        """Runs the Modifier Agent to modify existing code.
+
+        Args:
+            existing_code (str): The existing build123d code to modify.
+            modification_prompt (str): The user's modification request.
+            user_id (str): The unique identifier for the user.
+            session_id (str): The unique identifier for the session.
+            result_container (dict[str, str]): A dictionary to store the full output string.
+
+        Yields:
+            str: Chunks of the generated text output.
+        """
+        logger.info("--- Running Modifier Agent ---")
+
+        # Create the modifier agent with RAG context
+        modifier_agent = self.code_modifier.create_modifier_agent(
+            existing_code=existing_code,
+            modification_prompt=modification_prompt
+        )
+
+        modifier_runner = Runner(
+            agent=modifier_agent,
+            app_name=self.app_name,
+            session_service=self.session_service,
+            memory_service=self.memory_service
+        )
+
+        # The modifier agent just needs to know to apply the modification
+        # The instruction is already baked into the agent's system prompt
+        modifier_input = Content(
+            parts=[Part(text=f"Apply the modification: {modification_prompt}")],
+            role="user"
+        )
+
+        modifier_output = ""
+
+        async for event in modifier_runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=modifier_input
+        ):
+            if event.content:
+                tool_output = self._parse_tool_output(event.content)
+                if tool_output:
+                    modifier_output += f"\nTool Output: {tool_output}"
+
+            if event.is_final_response() and event.content and event.content.parts:
+                text_parts = [p.text for p in event.content.parts if p.text]
+                if text_parts:
+                    chunk = "\n" + "\n".join(text_parts)
+                    modifier_output += chunk
+                    yield "\n".join(text_parts)
+
+        result_container["output"] = modifier_output
+        logger.info(f"ControlFlow: Modifier Output Raw: {modifier_output}")
+
+    async def _execute_modification_iteration(
+        self,
+        existing_code: str,
+        modification_prompt: str,
+        user_id: str,
+        session_id: str
+    ) -> AsyncGenerator[str | tuple[bool, str], None]:
+        """Executes one iteration of the modification workflow.
+
+        Args:
+            existing_code (str): The existing build123d code.
+            modification_prompt (str): The user's modification request.
+            user_id (str): The unique identifier for the user.
+            session_id (str): The unique identifier for the session.
+
+        Yields:
+            Union[str, tuple[bool, str]]: Chunks of text output, and finally a tuple (success, message).
+        """
+        # 1. Run Modifier
+        modifier_result = {}
+        async for chunk in self._run_modifier_step(
+            existing_code, modification_prompt, user_id, session_id, modifier_result
+        ):
+            yield chunk
+
+        modifier_output = modifier_result.get("output", "")
+        stl_path, generation_error = self._extract_or_generate_stl(modifier_output)
+
+        if not stl_path:
+            logger.error(f"ControlFlow: Modification failed. Error: {generation_error}")
+            yield (False, f"Modification failed: {generation_error}")
+            return
+
+        # 2. Verify Modified Model
+        is_approved, feedback_output, png_path = await self._verify_model(
+            stl_path, f"Modified version of existing model: {modification_prompt}",
+            user_id, session_id
+        )
+
+        if png_path:
+            yield f"Modified Model Image: {png_path}\n"
+        else:
+            yield "\nFailed to render modified STL.\n"
+            yield (False, "Render failed")
+            return
+
+        if is_approved:
+            logger.info("ControlFlow: Modified Design Approved.")
+            friendly_msg = feedback_output.replace("APPROVED", "").strip()
+            if not friendly_msg:
+                friendly_msg = "Here is your modified 3D model."
+            yield f"{friendly_msg}\n"
+            yield (True, "")
+        else:
+            logger.info("ControlFlow: Modified Design Needs Adjustment.")
+            yield f"Designer Feedback: {feedback_output}\n"
+            yield (False, feedback_output)
+
+    async def run_modification(
+        self,
+        existing_code: str,
+        modification_prompt: str,
+        session_id: str,
+        user_id: str = "user",
+        inventory: list | None = None
+    ) -> AsyncGenerator[str, None]:
+        """Executes the modification workflow: Modifier -> Renderer -> Designer (Feedback).
+
+        Unlike generation, modification skips the initial Designer step and goes
+        directly to code modification using the existing code as base.
+
+        Args:
+            existing_code (str): The existing build123d code to modify.
+            modification_prompt (str): The user's modification request (e.g., "make it taller").
+            session_id (str): The unique identifier for the session.
+            user_id (str): The unique identifier for the user.
+            inventory (list | None): Optional list of available bricks for validation.
+
+        Yields:
+            str: Chunks of text output describing the process and results.
+        """
+        await self._ensure_session(session_id, user_id)
+
+        logger.info(f"ControlFlow: Starting modification workflow for: {modification_prompt[:100]}...")
+        yield f"Modifying model: {modification_prompt}\n"
+
+        # Validate existing code before attempting modification (including inventory check)
+        is_valid, errors = self.code_modifier.validate_modified_code(existing_code, inventory)
+        if not is_valid:
+            error_msg = f"Invalid base code. Errors: {', '.join(errors)}"
+            logger.error(f"ControlFlow: {error_msg}")
+            yield f"Error: {error_msg}\n"
+            yield "Modification not possible. Try rephrasing or use regenerate.\n"
+            return
+
+        # Run modification loop (fewer iterations than generation since we have a base)
+        max_loops = 2
+        current_code = existing_code
+
+        for loop in range(max_loops):
+            logger.info(f"--- Running Modification Loop {loop+1} ---")
+
+            async for chunk in self._execute_modification_iteration(
+                current_code, modification_prompt, user_id, session_id
+            ):
+                if isinstance(chunk, tuple):
+                    # Final result of the iteration
+                    success, message = chunk
+                    if success:
+                        return
+                    # If not successful and we have more loops, continue
+                    if loop < max_loops - 1:
+                        yield f"Retrying modification with feedback: {message[:100]}...\n"
+                else:
+                    # Streaming output
+                    yield chunk
+
+        # If loop finishes without success
+        yield "Modification not possible. Try rephrasing or use regenerate.\n"

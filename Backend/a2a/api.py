@@ -10,10 +10,11 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 
 from a2a.models import (
-    SendMessageRequest, Task, TaskStatus, TaskState, Message, Role, Part, FilePart, AgentCard
+    SendMessageRequest, Task, TaskStatus, TaskState, Message, Role, Part, FilePart,
+    AgentCard, MessageType, ModificationData
 )
 from a2a.task_manager import TaskManager
-from runner import run_agent
+from runner import run_agent, run_modification_agent
 from config import settings
 from tools.cad_tools import task_id_var
 
@@ -55,26 +56,24 @@ def _find_generated_files(task_id: str, output_dir: str) -> list[Part]:
     return parts
 
 async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
-    """Process an A2A task in the background.
+    """Process an A2A generation task in the background.
 
     Args:
         task_id (str): The unique identifier for the task.
         prompt (str): The input prompt from the user/agent.
         context_id (str): The context or session ID.
     """
-    logger.info(f"Processing A2A task {task_id} with prompt: {prompt}")
+    logger.info(f"Processing A2A generation task {task_id} with prompt: {prompt}")
     task_manager.update_task_status(task_id, TaskState.WORKING)
-    
+
     # Set the task ID in the context variable so tools can use it
     token = task_id_var.set(task_id)
-    
+
     try:
         final_response = ""
         # Execute the agent workflow via Runner
         async for response_chunk in run_agent(prompt=prompt, session_id=context_id):
             final_response = response_chunk
-            # Optional: Update task with intermediate progress if supported
-            # task_manager.update_task_status(task_id, TaskState.WORKING, Message(role=Role.AGENT, parts=[Part(text=response_chunk)]))
 
         # Check for generated files in outputs/ matching the task ID
         file_parts = _find_generated_files(task_id, settings.OUTPUT_DIR)
@@ -84,10 +83,10 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
             role=Role.AGENT,
             parts=parts
         )
-        
+
         task_manager.update_task_status(task_id, TaskState.COMPLETED, response_message)
 
-        logger.info(f"A2A task {task_id} completed successfully")
+        logger.info(f"A2A generation task {task_id} completed successfully")
 
     except Exception as e:
         error_msg = f"Internal error during generation: {str(e)}"
@@ -96,7 +95,80 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
             parts=[Part(text=error_msg)]
         )
         task_manager.update_task_status(task_id, TaskState.FAILED, response_message)
-        logger.error(f"A2A task {task_id} exception: {e}")
+        logger.error(f"A2A generation task {task_id} exception: {e}")
+
+    finally:
+        # Reset the context variable
+        task_id_var.reset(token)
+
+
+async def process_modification_task(
+    task_id: str,
+    modification_data: ModificationData,
+    context_id: str
+) -> None:
+    """Process an A2A modification task in the background.
+
+    Args:
+        task_id (str): The unique identifier for the task.
+        modification_data (ModificationData): The modification request data.
+        context_id (str): The context or session ID.
+    """
+    # Log modification request details (truncate potentially sensitive code)
+    logger.info(
+        f"Processing A2A modification task {task_id} with prompt: "
+        f"{modification_data.modification_prompt[:100]}..."
+    )
+    logger.info(
+        f"Modification task {task_id}: base_model_id={modification_data.base_model_id}, "
+        f"base_code_length={len(modification_data.base_code)} chars"
+    )
+
+    task_manager.update_task_status(task_id, TaskState.WORKING)
+
+    # Set the task ID in the context variable so tools can use it
+    token = task_id_var.set(task_id)
+
+    try:
+        final_response = ""
+        # Convert inventory to list of dicts if present
+        inventory_list = None
+        if modification_data.inventory:
+            inventory_list = [
+                {"size": b.size, "color": b.color, "count": b.count}
+                for b in modification_data.inventory
+            ]
+
+        # Execute the modification agent workflow via Runner
+        async for response_chunk in run_modification_agent(
+            existing_code=modification_data.base_code,
+            modification_prompt=modification_data.modification_prompt,
+            session_id=context_id,
+            inventory=inventory_list
+        ):
+            final_response = response_chunk
+
+        # Check for generated files in outputs/ matching the task ID
+        file_parts = _find_generated_files(task_id, settings.OUTPUT_DIR)
+        parts = [Part(text=final_response)] + file_parts
+
+        response_message = Message(
+            role=Role.AGENT,
+            parts=parts
+        )
+
+        task_manager.update_task_status(task_id, TaskState.COMPLETED, response_message)
+
+        logger.info(f"A2A modification task {task_id} completed successfully")
+
+    except Exception as e:
+        error_msg = f"Modification not possible. Try rephrasing or use regenerate. Error: {str(e)}"
+        response_message = Message(
+            role=Role.AGENT,
+            parts=[Part(text=error_msg)]
+        )
+        task_manager.update_task_status(task_id, TaskState.FAILED, response_message)
+        logger.error(f"A2A modification task {task_id} exception: {e}")
 
     finally:
         # Reset the context variable
@@ -106,6 +178,9 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
 async def a2a_send_message(request: SendMessageRequest, background_tasks: BackgroundTasks) -> Dict[str, Task]:
     """Handle incoming A2A messages and start a background task.
 
+    Supports both generation (text_to_lego, image_to_lego) and modification
+    (modify_lego_model) message types.
+
     Args:
         request (SendMessageRequest): The incoming message request.
         background_tasks (BackgroundTasks): FastAPI background tasks handler.
@@ -114,23 +189,78 @@ async def a2a_send_message(request: SendMessageRequest, background_tasks: Backgr
         Dict[str, Task]: A dictionary containing the created task.
 
     Raises:
-        HTTPException: If the message content is empty.
+        HTTPException: If the message content is empty or modification data is missing.
     """
+    # Handle modification requests
+    if request.message_type == MessageType.MODIFY_LEGO_MODEL:
+        if not request.modification_data:
+            raise HTTPException(
+                status_code=400,
+                detail="modification_data is required for modify_lego_model message type"
+            )
+
+        if not request.modification_data.base_code:
+            raise HTTPException(
+                status_code=400,
+                detail="base_code is required for modification requests"
+            )
+
+        if not request.modification_data.modification_prompt:
+            raise HTTPException(
+                status_code=400,
+                detail="modification_prompt is required for modification requests"
+            )
+
+        # Create Task
+        task = task_manager.create_task(context_id=request.message.context_id)
+
+        # Log modification request separately for analytics
+        logger.info(
+            "Modification request received",
+            extra={
+                "type": "modify_lego_model",
+                "task_id": task.id,
+                "base_model_id": request.modification_data.base_model_id,
+                "modification_prompt": request.modification_data.modification_prompt[:50],
+            }
+        )
+
+        # Start background processing for modification
+        background_tasks.add_task(
+            process_modification_task,
+            task.id,
+            request.modification_data,
+            request.message.context_id
+        )
+
+        return {"task": task}
+
+    # Handle generation requests (text_to_lego, image_to_lego)
     # Extract prompt from the first text part
     prompt = ""
     for part in request.message.parts:
         if part.text:
             prompt += part.text + "\n"
-    
+
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="No text content found in message")
 
     # Create Task
     task = task_manager.create_task(context_id=request.message.context_id)
-    
+
+    # Log generation request for analytics
+    logger.info(
+        "Generation request received",
+        extra={
+            "type": str(request.message_type),
+            "task_id": task.id,
+            "prompt": prompt[:50],
+        }
+    )
+
     # Start background processing
     background_tasks.add_task(process_a2a_task, task.id, prompt.strip(), request.message.context_id)
-    
+
     return {"task": task}
 
 @router.get("/v1/tasks/{id}")
@@ -165,14 +295,16 @@ async def a2a_get_agent_card(request: Request) -> AgentCard:
     return AgentCard(
         identity={
             "name": "FormaAI 3D Agent",
-            "description": "Generates 3D models (STL/STEP) from natural language descriptions using build123d and Gemini 3 Pro.",
+            "description": "Generates and modifies 3D LEGO models (STL/STEP) from natural language descriptions using build123d and Gemini 3 Pro.",
             "author": "FormaAI Team",
             "license": "Apache-2.0"
         },
         capabilities={
-            "input_types": ["text/plain"],
+            "input_types": ["text/plain", "application/json"],
             "output_types": ["model/stl", "model/step", "text/x-python"],
-            "models": ["gemini-3-pro-preview"]
+            "models": ["gemini-3-pro-preview"],
+            "message_types": ["text_to_lego", "image_to_lego", "modify_lego_model"],
+            "supports_modification": True
         },
         supported_interfaces=[
             {

@@ -1,21 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { nunito, inter, jetbrainsMono } from "@/lib/fonts";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "Forma AI | 3D Model Generation Agent",
+  title: "Lego Builder | AI-Powered 3D Model Generation",
   description:
-    "AI agent that turns natural language into engineered 3D assets.",
+    "Turn your ideas into buildable LEGO models with AI. Design, customize, and build with your inventory.",
 };
 
 export default function RootLayout({
@@ -24,10 +14,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0e0e0e] text-slate-200`}
-      >
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${nunito.variable} ${inter.variable} ${jetbrainsMono.variable}`}
+    >
+      <body className="antialiased">
         {children}
       </body>
     </html>

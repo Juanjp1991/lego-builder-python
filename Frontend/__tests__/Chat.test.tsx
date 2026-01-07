@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import Chat from '@/components/Chat';
-import { sendMessage, pollTask, getFileUrl, TaskState } from '@/lib/api';
+import { sendMessage, pollTask, TaskState, type Task } from '@/lib/api';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 // Mock the API
@@ -46,7 +46,7 @@ describe('Chat Component', () => {
     });
 
     it('submits form and displays user message', async () => {
-        vi.mocked(sendMessage).mockResolvedValueOnce({ id: 'task-123' } as any);
+        vi.mocked(sendMessage).mockResolvedValueOnce({ id: 'task-123' } as Partial<Task> as Task);
         vi.mocked(pollTask).mockResolvedValueOnce({
             id: 'task-123',
             status: { state: TaskState.COMPLETED },
@@ -54,7 +54,7 @@ describe('Chat Component', () => {
                 role: 'ROLE_AGENT',
                 parts: [{ text: 'Success' }]
             }]
-        } as any);
+        } as Partial<Task> as Task);
 
         render(<Chat />);
         const input = screen.getByPlaceholderText('Ask Forma AI');
@@ -76,7 +76,7 @@ describe('Chat Component', () => {
     });
 
     it('displays assistant response and model viewer on success', async () => {
-        vi.mocked(sendMessage).mockResolvedValueOnce({ id: 'task-123' } as any);
+        vi.mocked(sendMessage).mockResolvedValueOnce({ id: 'task-123' } as Partial<Task> as Task);
         vi.mocked(pollTask).mockResolvedValueOnce({
             id: 'task-123',
             status: { state: TaskState.COMPLETED },
@@ -98,7 +98,7 @@ describe('Chat Component', () => {
                     }
                 ]
             }]
-        } as any);
+        } as Partial<Task> as Task);
 
         render(<Chat />);
         const input = screen.getByPlaceholderText('Ask Forma AI');
