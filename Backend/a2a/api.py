@@ -84,6 +84,13 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
             parts=parts
         )
 
+        # Set artifacts on the task so frontend can access STL files
+        from a2a.models import Artifact
+        if file_parts:
+            task = task_manager.get_task(task_id)
+            if task:
+                task.artifacts = Artifact(parts=file_parts)
+
         task_manager.update_task_status(task_id, TaskState.COMPLETED, response_message)
 
         logger.info(f"A2A generation task {task_id} completed successfully")
@@ -156,6 +163,13 @@ async def process_modification_task(
             role=Role.AGENT,
             parts=parts
         )
+
+        # Set artifacts on the task so frontend can access STL files
+        from a2a.models import Artifact
+        if file_parts:
+            task = task_manager.get_task(task_id)
+            if task:
+                task.artifacts = Artifact(parts=file_parts)
 
         task_manager.update_task_status(task_id, TaskState.COMPLETED, response_message)
 

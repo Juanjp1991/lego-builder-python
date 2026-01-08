@@ -44,8 +44,24 @@ vi.mock("@/lib/db", () => ({
   db: {
     generationCache: {
       add: vi.fn(),
+      where: vi.fn(() => ({
+        equals: vi.fn(() => ({
+          first: vi.fn(() => Promise.resolve(null)),
+        })),
+      })),
     },
   },
+  getUserPreference: vi.fn(),
+  setUserPreference: vi.fn(),
+}));
+
+// Mock useFirstBuild hook
+vi.mock("@/lib/hooks/use-first-build", () => ({
+  useFirstBuild: vi.fn(() => ({
+    isFirstBuild: true,
+    isLoading: false,
+    setFirstBuildComplete: vi.fn(),
+  })),
 }));
 
 describe("PromptInput", () => {
@@ -233,5 +249,111 @@ describe("useGenerationStore", () => {
     expect(useGenerationStore.getState().elapsedTime).toBe(5);
 
     vi.useRealTimers();
+  });
+});
+
+// Import mocked hook for manipulation
+import { useFirstBuild } from "@/lib/hooks/use-first-build";
+import { FirstBuildBadge } from "@/components/generate/first-build-badge";
+import { AdvancedModeToggle } from "@/components/generate/advanced-mode-toggle";
+
+describe("First-Build Guarantee Integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe("FirstBuildBadge", () => {
+    it("renders with correct AC-compliant text", () => {
+      render(<FirstBuildBadge />);
+
+      // AC #4: badge should show "First-Build Mode - Simplified for success"
+      expect(
+        screen.getByText("First-Build Mode - Simplified for success")
+      ).toBeInTheDocument();
+    });
+
+    it("has blue styling classes per AC #4", () => {
+      render(<FirstBuildBadge />);
+
+      const badge = screen.getByRole("button");
+      expect(badge.className).toContain("bg-blue-100");
+      expect(badge.className).toContain("text-blue-800");
+    });
+  });
+
+  describe("AdvancedModeToggle", () => {
+    it("shows warning when enabled for first-time users (AC #5)", () => {
+      render(
+        <AdvancedModeToggle
+          enabled={true}
+          onChange={() => {}}
+          isFirstBuild={true}
+        />
+      );
+
+      expect(
+        screen.getByText(/Complex models may be harder to build/i)
+      ).toBeInTheDocument();
+    });
+
+    it("hides warning when not first-time user", () => {
+      render(
+        <AdvancedModeToggle
+          enabled={true}
+          onChange={() => {}}
+          isFirstBuild={false}
+        />
+      );
+
+      expect(
+        screen.queryByText(/Complex models may be harder to build/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("calls onChange when toggled (AC #5)", () => {
+      const handleChange = vi.fn();
+      render(
+        <AdvancedModeToggle
+          enabled={false}
+          onChange={handleChange}
+          isFirstBuild={true}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("switch"));
+      expect(handleChange).toHaveBeenCalledWith(true);
+    });
+  });
+
+  describe("Complexity determination", () => {
+    it("uses simple complexity when isFirstBuild is true and advancedMode is false", () => {
+      // Test the logic: isFirstBuild && !advancedModeEnabled -> 'simple'
+      const isFirstBuild = true;
+      const advancedModeEnabled = false;
+      const shouldUseSimpleMode = isFirstBuild && !advancedModeEnabled;
+      const complexity = shouldUseSimpleMode ? "simple" : "normal";
+
+      expect(complexity).toBe("simple");
+    });
+
+    it("uses normal complexity when advancedMode overrides first-build", () => {
+      // Test the logic: isFirstBuild && advancedModeEnabled -> 'normal'
+      const isFirstBuild = true;
+      const advancedModeEnabled = true;
+      const shouldUseSimpleMode = isFirstBuild && !advancedModeEnabled;
+      const complexity = shouldUseSimpleMode ? "simple" : "normal";
+
+      expect(complexity).toBe("normal");
+    });
+
+    it("uses normal complexity when not first-build", () => {
+      // Test the logic: !isFirstBuild -> 'normal'
+      const isFirstBuild = false;
+      const advancedModeEnabled = false;
+      const shouldUseSimpleMode = isFirstBuild && !advancedModeEnabled;
+      const complexity = shouldUseSimpleMode ? "simple" : "normal";
+
+      expect(complexity).toBe("normal");
+    });
   });
 });

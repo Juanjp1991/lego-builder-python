@@ -31,6 +31,17 @@ Style Guide:
 - **PREFER BUILDER MODE**: Describe the model in terms of adding/subtracting shapes from a context (Part/Sketch).
 - Avoid describing complex algebraic combinations if a simple Builder context sequence works.
 
+COMPLEXITY CONSTRAINTS (CRITICAL):
+- **SIMPLE MODE**: User requested simple/basic models. Keep specification MINIMAL.
+  - Maximum 5-8 primitive shapes (Box, Cylinder, Sphere, Cone)
+  - Maximum 3 boolean operations (subtract/intersect)
+  - Avoid excessive detail: NO intricate patterns, minimal fillets/chamfers
+  - Target STL file size: < 500KB (roughly < 10,000 faces)
+- **LEGO CONTEXT**: Models should be toy-like, not CAD-grade precision
+  - Rounded edges are nice-to-have, not required
+  - Focus on recognizable silhouette over fine details
+  - Think "LEGO brick simplicity" not "realistic sculpture"
+
 CRITICAL RULES:
 - Do NOT show your internal reasoning or self-corrections.
 - Do NOT say "Wait, that's not right" or "Let me start over".

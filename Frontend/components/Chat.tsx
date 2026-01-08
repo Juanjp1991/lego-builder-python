@@ -102,9 +102,12 @@ export default function Chat(): React.JSX.Element {
                 <div className="flex flex-1 flex-col items-center justify-center px-4 transition-all duration-500 ease-in-out">
                     <h1 className="mb-12 text-5xl font-medium tracking-tight sm:text-6xl">
                         <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">
-                            Hello, this is the Forma AI agent!
+                            Welcome to Lego Builder!
                         </span>
                     </h1>
+                    <p className="text-xl text-slate-400 max-w-2xl text-center mb-8">
+                        Transform your ideas into buildable 3D Lego models using AI
+                    </p>
                 </div>
             )}
 

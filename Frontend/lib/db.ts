@@ -49,3 +49,51 @@ export class LegoDatabase extends Dexie {
 
 // Export singleton database instance
 export const db = new LegoDatabase();
+
+// ===========================
+// USER PREFERENCE HELPERS
+// ===========================
+
+/**
+ * Retrieves a user preference from IndexedDB.
+ * Returns the stored value if found, otherwise returns the default value.
+ *
+ * @param key - The preference key to look up
+ * @param defaultValue - Value to return if key is not found
+ * @returns The stored preference value or defaultValue
+ */
+export async function getUserPreference<T extends string>(
+  key: string,
+  defaultValue: T
+): Promise<T> {
+  const pref = await db.userPreferences.where("key").equals(key).first();
+  return pref ? (pref.value as T) : defaultValue;
+}
+
+/**
+ * Sets a user preference in IndexedDB.
+ * Creates a new entry if the key doesn't exist, otherwise updates the existing entry.
+ *
+ * @param key - The preference key to set
+ * @param value - The value to store (must be serializable to string)
+ */
+export async function setUserPreference(
+  key: string,
+  value: string
+): Promise<void> {
+  const existing = await db.userPreferences.where("key").equals(key).first();
+  if (existing) {
+    await db.userPreferences.update(existing.id!, { value });
+  } else {
+    await db.userPreferences.add({ key, value });
+  }
+}
+
+/**
+ * Marks the user's first build as complete.
+ * Sets the isFirstBuild preference to "false" in IndexedDB.
+ * Called when the user completes their first build in Epic 5.
+ */
+export async function markFirstBuildComplete(): Promise<void> {
+  await setUserPreference("isFirstBuild", "false");
+}

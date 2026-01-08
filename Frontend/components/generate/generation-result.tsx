@@ -13,6 +13,7 @@ import { useGenerationStore } from "@/lib/stores/useGenerationStore";
 import { RetryIndicator } from "./retry-indicator";
 import { StructuralFeedbackBadge } from "./structural-feedback-badge";
 import { StructuralFeedbackModal } from "./structural-feedback-modal";
+import { ModelViewer } from "@/components/viewer/model-viewer";
 import {
   RotateCcw,
   Play,
@@ -75,25 +76,9 @@ export function GenerationResult({
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* 3D Viewer Placeholder - Story 2.3 will implement actual viewer */}
+          {/* 3D Model Viewer */}
           <div className="relative aspect-square bg-muted rounded-lg overflow-hidden">
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
-              <Blocks className="size-16 mb-4" />
-              <p className="text-sm font-medium">3D Model Preview</p>
-              <p className="text-xs text-muted-foreground/70 mt-1">
-                (Viewer coming in Story 2.3)
-              </p>
-            </div>
-
-            {/* Model URL badge */}
-            <div className="absolute bottom-3 left-3 right-3">
-              <div className="bg-background/90 backdrop-blur-sm rounded-md p-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <ExternalLink className="size-3 flex-shrink-0" />
-                  <span className="truncate font-mono">{model.modelUrl}</span>
-                </div>
-              </div>
-            </div>
+            <ModelViewer modelUrl={model.modelUrl} />
           </div>
 
           {/* Model Metadata */}

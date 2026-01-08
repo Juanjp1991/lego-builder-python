@@ -49,6 +49,24 @@ Cylinder(radius=5, height=10, align=(Align.CENTER, Align.CENTER, Align.MIN))
 Box(10, 10, 10, align=(Align.CENTER, Align.CENTER, Align.CENTER))
 ```
 
+COMPLEXITY CONSTRAINTS (CRITICAL FOR PERFORMANCE):
+- **KEEP IT SIMPLE**: Models must be lightweight and fast to generate
+  - Use COARSE geometry: prefer low-resolution cylinders/spheres
+  - Maximum 5-8 primitive shapes per model
+  - Maximum 3 boolean operations (subtract/intersect/union)
+  - Avoid loops that create many faces (e.g., for i in range(100))
+  - Target: Generated STL < 500KB (< 10,000 faces)
+- **LEGO-STYLE SIMPLICITY**:
+  - Use blocky approximations, not high-res curves
+  - Cylinders: segments=16 (not 32 or 64!)
+  - Spheres: u_count=8, v_count=8 (not 24!)
+  - Minimal fillets/chamfers (only 2-3 edges max)
+- **EFFICIENCY RULES**:
+  - Prefer Box/Cylinder over complex sketches
+  - Avoid extrude with taper on complex sketches
+  - No nested loops creating geometry
+  - Simple booleans only (one subtract, not 10 subtracts)
+
 **CRITICAL**:
 - DO NOT return the code as text.
 - CALL `create_cad_model(script_code="...")`.

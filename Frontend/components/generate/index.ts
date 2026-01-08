@@ -15,3 +15,8 @@ export {
   SUPPORTED_IMAGE_TYPES,
   type ValidationError,
 } from "./image-upload";
+
+// First-Build Guarantee components (Story 2.5)
+export { FirstBuildBadge } from "./first-build-badge";
+export { AdvancedModeToggle } from "./advanced-mode-toggle";
+export { FirstBuildCelebration } from "./first-build-celebration";

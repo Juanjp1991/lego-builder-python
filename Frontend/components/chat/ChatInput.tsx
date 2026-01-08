@@ -31,7 +31,7 @@ export default function ChatInput({ onSubmit, loading }: ChatInputProps): React.
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Ask Forma AI"
+                    placeholder="Describe what you want to build... (e.g., 'a small red dragon')"
                     className="w-full bg-transparent px-4 py-3 text-lg text-white placeholder:text-neutral-500 focus:outline-none"
                     disabled={loading}
                 />

@@ -108,7 +108,7 @@ export interface StructuralAnalysis {
  * Options for generating a LEGO model.
  */
 export interface GenerateOptions {
-    complexity?: "simple" | "medium" | "complex"; // Model complexity level
+    complexity?: "simple" | "normal"; // Model complexity level (simple for First-Build Guarantee)
     size?: "small" | "medium" | "large"; // Physical model size
     useInventory?: boolean; // Whether to match user's brick inventory
 }

@@ -68,7 +68,7 @@ describe("LEGO API Functions", () => {
                 .mockResolvedValueOnce(createMockResponse(mockCompletedTask)); // getTask (poll)
 
             const result = await generateLegoModel("text", "a small dragon", [], [], {
-                complexity: "medium",
+                complexity: "normal",
             });
 
             expect(result.taskId).toBe("task-123");
@@ -185,6 +185,66 @@ describe("LEGO API Functions", () => {
 
             expect(result.structuralAnalysis).toBeUndefined();
             expect(result.brickCount).toBe(50);
+        });
+
+        it("should include complexity 'simple' in request for First-Build Guarantee", async () => {
+            const mockTask = {
+                task: { id: "task-simple", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-simple",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            { file: { fileWithUri: "/model.stl", mediaType: "model/stl" } },
+                        ],
+                    },
+                    history: [],
+                },
+            };
+
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
+
+            await generateLegoModel("text", "a simple house", [], [], {
+                complexity: "simple",
+            });
+
+            // Check that the first fetch call (sendMessage) included the complexity option
+            const firstCall = mockFetch.mock.calls[0];
+            expect(firstCall[1].body).toContain("simple");
+        });
+
+        it("should include complexity 'normal' in request by default", async () => {
+            const mockTask = {
+                task: { id: "task-normal", status: { state: "TASK_STATE_WORKING" }, history: [] },
+            };
+            const mockCompletedTask = {
+                task: {
+                    id: "task-normal",
+                    status: { state: "TASK_STATE_COMPLETED" },
+                    artifacts: {
+                        parts: [
+                            { file: { fileWithUri: "/model.stl", mediaType: "model/stl" } },
+                        ],
+                    },
+                    history: [],
+                },
+            };
+
+            mockFetch
+                .mockResolvedValueOnce(createMockResponse(mockTask))
+                .mockResolvedValueOnce(createMockResponse(mockCompletedTask));
+
+            await generateLegoModel("text", "a complex castle", [], [], {
+                complexity: "normal",
+            });
+
+            // Check that the first fetch call (sendMessage) included the complexity option
+            const firstCall = mockFetch.mock.calls[0];
+            expect(firstCall[1].body).toContain("normal");
         });
 
         it("should handle structural analysis from data part", async () => {
