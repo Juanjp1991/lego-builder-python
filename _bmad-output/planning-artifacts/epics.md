@@ -774,6 +774,166 @@ So that my first experience is successful and builds my confidence.
 - Frontend manages `isFirstBuild` flag in IndexedDB
 - Hook: `useFirstBuild()` returns `{ isFirstBuild, setFirstBuildComplete }`
 
+### Story 2.5.1: Backend - Physical Buildability Prompts & Validation
+
+As a developer,
+I want the Designer and Coder agents to generate models optimized for real-world LEGO construction with programmatic validation,
+So that users can physically build the generated models with standard LEGO bricks.
+
+**Acceptance Criteria:**
+
+**Given** a user submits a generation request via the A2A protocol
+**When** the backend agents process the request
+
+**Then** the **Designer agent** (`/Backend/sub_agents/designer/prompt.py`) prompt includes:
+- **Voxel/Minecraft-inspired aesthetic**: Blocky, chunky shapes with clear geometric forms - no smooth curves or organic shapes
+- Layer-by-layer construction mindset (bottom-up assembly)
+- Stud alignment on 8mm grid (standard LEGO pitch)
+- Overlapping joint patterns (staggered like real brickwork, no vertical seams >2 layers)
+- No floating elements (every brick connects to structure below or baseplate)
+- Color grouping per layer (minimize color switches during build)
+- **Standard bricks ONLY**: 2x2, 2x4, 2x6, 1x2, 1x4, 1x6 (no other sizes allowed)
+
+**And** the **Coder agent** (`/Backend/sub_agents/coder/prompt.py`) prompt includes:
+- Position bricks on 8mm X/Y grid
+- Z-axis increments: 9.6mm per brick layer, 3.2mm per plate layer
+- Enforce stud-to-anti-stud connections (no floating geometry)
+- **Standard bricks ONLY**: 2x2, 2x4, 2x6, 1x2, 1x4, 1x6 (reject any other sizes)
+- Output `build_sequence` metadata with ordered brick placements
+- Output `layers` array: `[{z: 0, bricks: [...]}, {z: 9.6, bricks: [...]}]`
+- Validate before returning: no enclosed voids, no impossible assembly order
+
+**And** the generation request accepts a **model size option** (`options.modelSize`):
+
+| Size | Name | Brick Range | Layer Range | Description |
+|------|------|-------------|-------------|-------------|
+| `tiny` | "Quick Build" | 15-30 bricks | 1-8 layers | Simple, fast builds for beginners |
+| `small` | "Standard" | 30-60 bricks | 2-10 layers | Default size, balanced complexity |
+| `medium` | "Detailed" | 60-120 bricks | 4-13 layers | More detail, longer build time |
+| `large` | "Grand" | 120-200 bricks | 6-17 layers | Complex builds, experienced builders |
+| `epic` | "Epic" | 200-350 bricks | 10-23 layers | Maximum size, showcase pieces |
+| `custom` | "Custom" | User-defined | User-defined | User specifies exact parameters |
+
+**And** when `modelSize = 'custom'`, additional parameters are accepted:
+```typescript
+{
+  modelSize: 'custom',
+  customSettings: {
+    minBricks: number,    // Minimum brick count (10-1000)
+    maxBricks: number,    // Maximum brick count (10-1000)
+    minLayers: number,    // Minimum layer count (1-50)
+    maxLayers: number     // Maximum layer count (1-50)
+  }
+}
+```
+
+**And** custom settings are validated:
+- `minBricks` must be ≥ 10 and ≤ `maxBricks`
+- `maxBricks` must be ≤ 1000 (hard limit for performance)
+- `minLayers` must be ≥ 1 and ≤ `maxLayers`
+- `maxLayers` must be ≤ 50
+- Invalid values return error: "Custom settings out of range"
+
+**And** the Designer agent adapts complexity based on `modelSize`:
+- `tiny`: 1-8 layers, simple silhouette, single color recommended
+- `small`: 2-10 layers, recognizable shape, 2-3 colors
+- `medium`: 4-13 layers, detailed features, 3-5 colors
+- `large`: 6-17 layers, intricate details, unlimited colors
+- `epic`: 10-23 layers, highly detailed showcase piece, unlimited colors, multiple sections
+- `custom`: Uses `customSettings.minLayers` and `customSettings.maxLayers`, complexity scales proportionally to brick range
+
+**And** the Coder agent enforces brick count within the selected range:
+- If generated model exceeds range, simplify automatically
+- If model is below minimum, add structural detail to reach minimum
+
+**And** a new **buildability validator** is implemented at `/Backend/validation/buildability.py`:
+```python
+@dataclass
+class BuildabilityResult:
+    valid: bool
+    score: int  # 0-100
+    layer_count: int
+    issues: list[str]
+    recommendations: list[str]
+    build_sequence: list[BrickPlacement]
+    estimated_build_time_minutes: int
+
+def validate_buildability(model_data: dict) -> BuildabilityResult:
+    """
+    Validates:
+    1. Grid alignment - all bricks on 8mm X/Y grid, correct Z increments
+    2. Connectivity - no floating bricks, each connects to structure below
+    3. Staggered joints - no vertical seams running through >2 consecutive layers
+    4. Assembly order - build sequence is physically possible (no trapped spaces)
+    5. Structural stability - base width >= top width, center of mass over base
+    """
+```
+
+**And** the validator checks these specific rules:
+
+| Rule | Check | Failure Action |
+|------|-------|----------------|
+| Grid alignment | All X/Y positions divisible by 8mm | Flag misaligned bricks |
+| Z-axis spacing | Bricks at 9.6mm increments, plates at 3.2mm | Flag incorrect heights |
+| No floating bricks | Each brick (except layer 0) overlaps ≥1 stud with brick below | Flag floating elements |
+| Staggered joints | Vertical seams don't align for >2 layers | Recommend stagger pattern |
+| Assembly possible | No brick placement requires reaching through solid geometry | Flag trapped placements |
+| Stability | Base footprint ≥ 60% of max footprint, CoM within base | Flag top-heavy designs |
+
+**And** if `buildability.score < 70`, the Coder agent attempts one automatic self-correction pass:
+- Receives validation issues
+- Modifies code to address specific problems
+- Re-validates before returning to user
+- Self-correction does NOT count against user's retry limit
+
+**And** the A2A generation response includes buildability metadata:
+```json
+{
+  "stl_url": "https://...",
+  "model_metadata": {
+    "brick_count": 45,
+    "dimensions": {"x": 80, "y": 64, "z": 57.6}
+  },
+  "buildability": {
+    "score": 87,
+    "valid": true,
+    "layer_count": 6,
+    "issues": [],
+    "recommendations": ["Consider wider base for stability"],
+    "estimated_build_time_minutes": 12,
+    "build_sequence": [
+      {"step": 1, "brick": "2x4", "color": "red", "position": {"x": 0, "y": 0, "z": 0}},
+      {"step": 2, "brick": "2x4", "color": "red", "position": {"x": 32, "y": 0, "z": 0}}
+    ]
+  }
+}
+```
+
+**And** the Designer agent avoids specifying:
+- Any brick sizes NOT in the standard set (only 2x2, 2x4, 2x6, 1x2, 1x4, 1x6 allowed)
+- Technic pieces, hinges, axles, plates, or specialty elements
+- SNOT techniques (Studs Not On Top) - MVP constraint
+- Curved surfaces, organic shapes, or smooth gradients (voxel style only)
+- Diagonal placements or angled bricks
+
+**And** the Coder agent optimizes for:
+- Minimum brick count (prefer 2x4 over 4x 1x2 when possible)
+- Structural stability (pyramid principle: wide base, narrower top)
+- Build efficiency (same-color bricks grouped in consecutive steps)
+- Standard brick ratios (2:5 height-to-width for bricks, 2:5:3 for plates)
+
+**Technical Implementation:**
+- Modify: `/Backend/sub_agents/designer/prompt.py`
+- Modify: `/Backend/sub_agents/coder/prompt.py`
+- Create: `/Backend/validation/buildability.py`
+- Create: `/Backend/validation/__init__.py`
+- Integrate validator into generation pipeline (call after Coder, before Renderer)
+- Unit tests: `/Backend/tests/test_buildability.py`
+
+**Dependencies:**
+- Requires Story 2.1 (generation pipeline) to be complete
+- Buildability metadata consumed by Story 2.4 (structural feedback display)
+
 ### Story 2.6: Generation Error Handling & Recovery
 
 As a user,

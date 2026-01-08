@@ -20,3 +20,4 @@ export {
 export { FirstBuildBadge } from "./first-build-badge";
 export { AdvancedModeToggle } from "./advanced-mode-toggle";
 export { FirstBuildCelebration } from "./first-build-celebration";
+export { SizeSelector } from "./size-selector";

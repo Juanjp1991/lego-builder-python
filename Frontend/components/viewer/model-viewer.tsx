@@ -14,6 +14,8 @@ import { STLLoader } from "three-stdlib";
 import * as THREE from "three";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { LegoBrickScene } from "./lego-brick-scene";
+import type { BrickPlacement } from "@/lib/types";
 
 // ============================================================================
 // Types
@@ -21,6 +23,8 @@ import { cn } from "@/lib/utils";
 
 interface ModelViewerContextValue {
   modelUrl: string;
+  buildSequence?: BrickPlacement[];
+  renderMode: "stl" | "bricks";
   status: "loading" | "loaded" | "error";
   error: Error | null;
   onRetry?: () => void;
@@ -28,6 +32,8 @@ interface ModelViewerContextValue {
 
 interface ModelViewerProps {
   modelUrl: string;
+  buildSequence?: BrickPlacement[];
+  renderMode?: "stl" | "bricks";
   className?: string;
   onLoad?: () => void;
   onError?: (error: Error) => void;
@@ -184,9 +190,11 @@ function STLModel({ url, color = "#0066CC" }: STLModelProps): React.JSX.Element 
 
 interface SceneProps {
   modelUrl: string;
+  buildSequence?: BrickPlacement[];
+  renderMode: "stl" | "bricks";
 }
 
-function Scene({ modelUrl }: SceneProps): React.JSX.Element {
+function Scene({ modelUrl, buildSequence, renderMode }: SceneProps): React.JSX.Element {
   return (
     <>
       {/* Lighting: ambient + 2 directional for depth */}
@@ -197,7 +205,11 @@ function Scene({ modelUrl }: SceneProps): React.JSX.Element {
       {/* Model with auto-framing bounds */}
       <Bounds fit clip observe margin={1.2}>
         <Center>
-          <STLModel url={modelUrl} />
+          {renderMode === "bricks" && buildSequence && buildSequence.length > 0 ? (
+            <LegoBrickScene buildSequence={buildSequence} />
+          ) : (
+            <STLModel url={modelUrl} />
+          )}
         </Center>
       </Bounds>
     </>
@@ -209,7 +221,7 @@ function Scene({ modelUrl }: SceneProps): React.JSX.Element {
 // ============================================================================
 
 function ModelViewerCanvas(): React.JSX.Element | null {
-  const { modelUrl, status } = useModelViewerContext();
+  const { modelUrl, buildSequence, renderMode, status } = useModelViewerContext();
 
   if (status === "error") {
     return null;
@@ -228,12 +240,12 @@ function ModelViewerCanvas(): React.JSX.Element | null {
       style={{
         width: "100%",
         height: "100%",
-        background: "#F7F5F3",
+        background: "#1a1a2e",
       }}
       gl={{ antialias: true, alpha: false }}
     >
       <Suspense fallback={null}>
-        <Scene modelUrl={modelUrl} />
+        <Scene modelUrl={modelUrl} buildSequence={buildSequence} renderMode={renderMode} />
       </Suspense>
       <OrbitControls
         enableDamping
@@ -417,6 +429,8 @@ const MIN_LOADING_DISPLAY_MS = 300;
 
 const ModelViewer: ModelViewerComponent = ({
   modelUrl,
+  buildSequence,
+  renderMode = "stl",
   className,
   onLoad,
   onError,
@@ -461,14 +475,19 @@ const ModelViewer: ModelViewerComponent = ({
     return () => clearTimeout(timeout);
   }, [modelUrl, retryKey, status, onLoad]);
 
+  // Determine render mode: use bricks if buildSequence provided, otherwise STL
+  const effectiveRenderMode = buildSequence && buildSequence.length > 0 ? "bricks" : renderMode;
+
   const contextValue = useMemo<ModelViewerContextValue>(
     () => ({
       modelUrl,
+      buildSequence,
+      renderMode: effectiveRenderMode,
       status,
       error,
       onRetry: handleRetry,
     }),
-    [modelUrl, status, error, handleRetry]
+    [modelUrl, buildSequence, effectiveRenderMode, status, error, handleRetry]
   );
 
   return (

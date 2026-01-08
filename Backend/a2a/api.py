@@ -11,12 +11,14 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 
 from a2a.models import (
     SendMessageRequest, Task, TaskStatus, TaskState, Message, Role, Part, FilePart,
-    AgentCard, MessageType, ModificationData
+    AgentCard, MessageType, ModificationData, BuildabilityMetadata, ModelMetadata,
+    GenerateOptions, ModelSizeEnum
 )
 from a2a.task_manager import TaskManager
-from runner import run_agent, run_modification_agent
+from runner import run_agent, run_modification_agent, control_flow_agent
 from config import settings
 from tools.cad_tools import task_id_var
+from models.generation_options import MODEL_SIZE_SPECS, ModelSize
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +57,25 @@ def _find_generated_files(task_id: str, output_dir: str) -> list[Part]:
             )))
     return parts
 
-async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
+async def process_a2a_task(
+    task_id: str,
+    prompt: str,
+    context_id: str,
+    generation_options: GenerateOptions | None = None
+) -> None:
     """Process an A2A generation task in the background.
 
     Args:
         task_id (str): The unique identifier for the task.
         prompt (str): The input prompt from the user/agent.
         context_id (str): The context or session ID.
+        generation_options (GenerateOptions | None): Optional generation options (model size, etc.)
     """
     logger.info(f"Processing A2A generation task {task_id} with prompt: {prompt}")
+    if generation_options:
+        logger.info(f"Generation options: model_size={generation_options.model_size}, "
+                   f"complexity={generation_options.complexity}")
+
     task_manager.update_task_status(task_id, TaskState.WORKING)
 
     # Set the task ID in the context variable so tools can use it
@@ -71,17 +83,72 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
 
     try:
         final_response = ""
+
+        # Add model size info to prompt if specified
+        enhanced_prompt = prompt
+        if generation_options and generation_options.model_size:
+            size = generation_options.model_size
+            if size != ModelSizeEnum.CUSTOM:
+                # Map A2A enum to internal enum
+                internal_size = ModelSize(size.value)
+                spec = MODEL_SIZE_SPECS.get(internal_size, MODEL_SIZE_SPECS[ModelSize.SMALL])
+                enhanced_prompt = f"""[MODEL SIZE: {spec.get('display_name', size.value).upper()}]
+Target brick count: {spec['min_bricks']}-{spec['max_bricks']} bricks
+Target layer count: {spec['min_layers']}-{spec['max_layers']} layers
+
+{prompt}"""
+            elif generation_options.custom_settings:
+                cs = generation_options.custom_settings
+                enhanced_prompt = f"""[MODEL SIZE: CUSTOM]
+Target brick count: {cs.min_bricks}-{cs.max_bricks} bricks
+Target layer count: {cs.min_layers}-{cs.max_layers} layers
+
+{prompt}"""
+
         # Execute the agent workflow via Runner
-        async for response_chunk in run_agent(prompt=prompt, session_id=context_id):
+        async for response_chunk in run_agent(
+            prompt=enhanced_prompt, 
+            session_id=context_id,
+            generation_options=generation_options
+        ):
             final_response = response_chunk
 
         # Check for generated files in outputs/ matching the task ID
         file_parts = _find_generated_files(task_id, settings.OUTPUT_DIR)
-        parts = [Part(text=final_response)] + file_parts
+
+        # Build response parts including buildability metadata
+        response_parts = [Part(text=final_response)] + file_parts
+
+        # Get buildability result from control flow agent
+        buildability_result = control_flow_agent.get_last_buildability_result()
+        buildability_data = None
+
+        if buildability_result:
+            buildability_data = BuildabilityMetadata(
+                score=buildability_result.score,
+                valid=buildability_result.valid,
+                layer_count=buildability_result.layer_count,
+                issues=buildability_result.issues,
+                recommendations=buildability_result.recommendations,
+                estimated_build_time_minutes=buildability_result.estimated_build_time_minutes,
+                build_sequence=[b.to_dict() for b in buildability_result.build_sequence]
+            )
+
+            # Add buildability metadata as a data part
+            response_parts.append(Part(
+                data={
+                    "buildability": buildability_data.model_dump(),
+                    "model_metadata": {
+                        "brick_count": len(buildability_result.build_sequence),
+                        "layer_count": buildability_result.layer_count
+                    }
+                },
+                metadata={"type": "buildability_result"}
+            ))
 
         response_message = Message(
             role=Role.AGENT,
-            parts=parts
+            parts=response_parts
         )
 
         # Set artifacts on the task so frontend can access STL files
@@ -90,10 +157,20 @@ async def process_a2a_task(task_id: str, prompt: str, context_id: str) -> None:
             task = task_manager.get_task(task_id)
             if task:
                 task.artifacts = Artifact(parts=file_parts)
+                # Also store buildability in task metadata
+                if buildability_data:
+                    task.metadata = task.metadata or {}
+                    task.metadata["buildability"] = buildability_data.model_dump()
+                    task.metadata["model_metadata"] = {
+                        "brick_count": len(buildability_result.build_sequence) if buildability_result else 0,
+                        "layer_count": buildability_result.layer_count if buildability_result else 0
+                    }
 
         task_manager.update_task_status(task_id, TaskState.COMPLETED, response_message)
 
         logger.info(f"A2A generation task {task_id} completed successfully")
+        if buildability_result:
+            logger.info(f"Buildability: score={buildability_result.score}, valid={buildability_result.valid}")
 
     except Exception as e:
         error_msg = f"Internal error during generation: {str(e)}"
@@ -272,8 +349,14 @@ async def a2a_send_message(request: SendMessageRequest, background_tasks: Backgr
         }
     )
 
-    # Start background processing
-    background_tasks.add_task(process_a2a_task, task.id, prompt.strip(), request.message.context_id)
+    # Start background processing with generation options
+    background_tasks.add_task(
+        process_a2a_task,
+        task.id,
+        prompt.strip(),
+        request.message.context_id,
+        request.generation_options
+    )
 
     return {"task": task}
 

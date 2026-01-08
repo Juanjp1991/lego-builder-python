@@ -97,8 +97,8 @@ def create_cad_model(script_code: str) -> dict:
     with multiprocessing.Pool(processes=1) as pool:
         async_result = pool.apply_async(_execute_and_export, (script_code, OUTPUT_DIR, base_name))
         try:
-            # 120 second timeout
-            result = async_result.get(timeout=120)
+            # 10 minute timeout (600 seconds)
+            result = async_result.get(timeout=600)
             return result
         except multiprocessing.TimeoutError:
             return {

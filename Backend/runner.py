@@ -4,11 +4,11 @@ This module initializes the necessary services and the ControlFlowAgent,
 and provides functions to run generation and modification workflows.
 """
 
-import asyncio
 from typing import AsyncGenerator
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from sub_agents.control_flow.agent import ControlFlowAgent
+from a2a.models import GenerateOptions
 
 # Initialize services
 session_service = InMemorySessionService()
@@ -18,18 +18,24 @@ memory_service = InMemoryMemoryService()
 control_flow_agent = ControlFlowAgent(session_service, memory_service)
 
 
-async def run_agent(prompt: str, session_id: str, user_id: str = "user") -> AsyncGenerator[str, None]:
+async def run_agent(
+    prompt: str, 
+    session_id: str, 
+    user_id: str = "user",
+    generation_options: GenerateOptions | None = None
+) -> AsyncGenerator[str, None]:
     """Executes the generation workflow via ControlFlowAgent.
 
     Args:
         prompt (str): The input prompt for the agent.
         session_id (str): The unique session identifier.
         user_id (str): The user identifier. Defaults to "user".
+        generation_options (GenerateOptions | None): Optional generation options.
 
     Yields:
         str: Chunks of the agent's response.
     """
-    async for chunk in control_flow_agent.run(prompt, session_id, user_id):
+    async for chunk in control_flow_agent.run(prompt, session_id, user_id, generation_options):
         yield chunk
 
 

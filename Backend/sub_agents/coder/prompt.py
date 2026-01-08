@@ -49,20 +49,86 @@ Cylinder(radius=5, height=10, align=(Align.CENTER, Align.CENTER, Align.MIN))
 Box(10, 10, 10, align=(Align.CENTER, Align.CENTER, Align.CENTER))
 ```
 
+LEGO PHYSICAL CONSTRUCTION RULES (CRITICAL - ALWAYS APPLY):
+- **BRICK-BASED GEOMETRY ONLY**: The final model MUST be constructed using brick-like shapes.
+  - DO NOT use Cylinder or Sphere for the main model body. These are NOT LEGO bricks.
+  - Approximate all curves and spheres using stacked Box/rectangular shapes.
+  - Think "pixel art" in 3D - every shape is a stacked rectangular block.
+- **8mm X/Y GRID**: All brick X/Y positions must be multiples of 8mm (standard LEGO stud spacing)
+- **Z-AXIS HEIGHT**: 9.6mm per layer (standard LEGO brick height)
+- **STUD CONNECTIONS**: Every brick must interlock with >=1 brick below OR above (both directions valid)
+- **STANDARD BRICKS ONLY**: 2x2, 2x4, 2x6, 1x2, 1x4, 1x6. Reject any other sizes.
+- **NO FLOATING GEOMETRY**: No brick can exist without connection to structure
+- **NO ENCLOSED VOIDS**: Assembly must be physically possible (no trapped spaces)
+- **OUTPUT BUILD SEQUENCE**: Include step-by-step brick placement order
+
+REALISTIC LEGO BRICK GEOMETRY (CRITICAL FOR VISUAL QUALITY):
+Each brick MUST have visible studs on top. Use this SIMPLE and CORRECT pattern:
+
+**SIMPLE BRICK APPROACH (RECOMMENDED):**
+For each brick, create a Box for the base, then add studs ON TOP of that box.
+DO NOT use complex positioning. Keep it simple:
+
+```python
+# Create a 2x4 brick at position (x, y, z)
+from build123d import *
+
+# Brick base dimensions
+brick_width = 2 * 8  # 16mm
+brick_length = 4 * 8  # 32mm  
+brick_height = 9.6
+
+# Create base box centered at origin, then move it
+with BuildPart() as brick_2x4:
+    # Base plate
+    Box(brick_width, brick_length, brick_height)
+    # Add 8 studs (2x4 = 8 studs) on top face
+    with BuildSketch(brick_2x4.faces().sort_by(Axis.Z)[-1]):  # Top face
+        with GridLocations(8, 8, 2, 4):  # 8mm spacing, 2 cols, 4 rows
+            Circle(2.4)  # Stud radius
+    extrude(amount=1.8)  # Stud height
+
+# Position the complete brick
+result = brick_2x4.part.move(Location((x, y, z)))
+```
+
+**KEY RULES:**
+- Build each brick at ORIGIN first, then move it to final position
+- Use GridLocations for studs - much cleaner than loops
+- Studs go on the TOP FACE of each box
+
+**COLORS ARE CRITICAL (STL doesn't store colors, so use metadata):**
+You MUST assign colors in the build_sequence metadata! The frontend renders colors from this data.
+Suggested distribution:
+- 60% of bricks: Primary color (red, blue, or green based on subject)
+- 30% of bricks: Secondary color (white, gray, or yellow)
+- 10% of bricks: Accent color (black, orange, or contrasting)
+
+Example color assignments:
+- Teddy bear: brown body, tan face, black eyes/nose
+- Airplane: white body, blue wings, red accents
+- Car: red body, black wheels, gray details
+
+REQUIRED OUTPUT METADATA (COLORS REQUIRED!):
+Your code MUST generate these variables alongside the 3D model:
+- `build_sequence`: List[Dict] with ordered brick placements - **INCLUDE COLOR FOR EACH BRICK**
+  Example: [{"step": 1, "brick": "2x4", "color": "red", "position": {"x": 0, "y": 0, "z": 0}}, 
+            {"step": 2, "brick": "2x2", "color": "white", "position": {"x": 16, "y": 0, "z": 0}}, ...]
+- `layers`: List[Dict] grouping bricks by Z-height
+- `brick_count`: Total number of bricks
+- `layer_count`: Total number of layers
+
 COMPLEXITY CONSTRAINTS (CRITICAL FOR PERFORMANCE):
 - **KEEP IT SIMPLE**: Models must be lightweight and fast to generate
-  - Use COARSE geometry: prefer low-resolution cylinders/spheres
-  - Maximum 5-8 primitive shapes per model
+  - Maximum 5-8 Box shapes per model (NO Cylinders or Spheres!)
   - Maximum 3 boolean operations (subtract/intersect/union)
   - Avoid loops that create many faces (e.g., for i in range(100))
   - Target: Generated STL < 500KB (< 10,000 faces)
 - **LEGO-STYLE SIMPLICITY**:
-  - Use blocky approximations, not high-res curves
-  - Cylinders: segments=16 (not 32 or 64!)
-  - Spheres: u_count=8, v_count=8 (not 24!)
-  - Minimal fillets/chamfers (only 2-3 edges max)
+  - Use blocky Box shapes only - approximate curves with stacked rectangles
+  - Minimal fillets/chamfers (only 2-3 edges max, small radius)
 - **EFFICIENCY RULES**:
-  - Prefer Box/Cylinder over complex sketches
+  - Prefer Box over any other primitive
   - Avoid extrude with taper on complex sketches
   - No nested loops creating geometry
   - Simple booleans only (one subtract, not 10 subtracts)

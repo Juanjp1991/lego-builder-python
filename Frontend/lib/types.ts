@@ -105,12 +105,86 @@ export interface StructuralAnalysis {
 // ===========================
 
 /**
+ * Model size tiers for LEGO generation.
+ */
+export type ModelSize = "tiny" | "small" | "medium" | "large" | "epic" | "custom";
+
+/**
+ * Custom size settings for user-defined model complexity.
+ */
+export interface CustomSizeSettings {
+  minBricks: number; // Minimum number of bricks (>= 10)
+  maxBricks: number; // Maximum number of bricks (<= 1000)
+  minLayers: number; // Minimum number of layers (>= 1)
+  maxLayers: number; // Maximum number of layers (<= 50)
+}
+
+/**
+ * Model size specifications for each tier.
+ */
+export const MODEL_SIZE_SPECS: Record<Exclude<ModelSize, "custom">, {
+  minBricks: number;
+  maxBricks: number;
+  minLayers: number;
+  maxLayers: number;
+  displayName: string;
+}> = {
+  tiny: { minBricks: 15, maxBricks: 30, minLayers: 1, maxLayers: 8, displayName: "Quick Build" },
+  small: { minBricks: 30, maxBricks: 60, minLayers: 2, maxLayers: 10, displayName: "Standard" },
+  medium: { minBricks: 60, maxBricks: 120, minLayers: 4, maxLayers: 13, displayName: "Detailed" },
+  large: { minBricks: 120, maxBricks: 200, minLayers: 6, maxLayers: 17, displayName: "Grand" },
+  epic: { minBricks: 200, maxBricks: 350, minLayers: 10, maxLayers: 23, displayName: "Epic" },
+};
+
+/**
  * Options for generating a LEGO model.
  */
 export interface GenerateOptions {
     complexity?: "simple" | "normal"; // Model complexity level (simple for First-Build Guarantee)
-    size?: "small" | "medium" | "large"; // Physical model size
+    modelSize?: ModelSize; // Model size tier
+    customSettings?: CustomSizeSettings; // Required when modelSize is "custom"
     useInventory?: boolean; // Whether to match user's brick inventory
+}
+
+/**
+ * Represents a brick placement in the build sequence.
+ */
+export interface BrickPlacement {
+  step: number;
+  brick: string; // "2x4", "2x2", etc.
+  color: string;
+  position: {
+    x: number;
+    y: number;
+    z: number;
+  };
+}
+
+/**
+ * Buildability validation result from the backend.
+ */
+export interface BuildabilityMetadata {
+  score: number; // 0-100
+  valid: boolean;
+  layerCount: number;
+  issues: string[];
+  recommendations: string[];
+  estimatedBuildTimeMinutes: number;
+  buildSequence: BrickPlacement[];
+}
+
+/**
+ * Model metadata from the backend.
+ */
+export interface ModelMetadata {
+  brickCount: number;
+  layerCount: number;
+  dimensions?: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  buildability?: BuildabilityMetadata;
 }
 
 /**
@@ -121,7 +195,9 @@ export interface GeneratedModel {
   modelUrl: string; // URL to download STL file
   stlData?: string; // Optional STL file content
   brickCount?: number; // Estimated number of bricks
-  structuralAnalysis?: StructuralAnalysis; // Optional structural feedback from backend
+  structuralAnalysis?: StructuralAnalysis; // Optional structural feedback from backend (legacy)
+  modelMetadata?: ModelMetadata; // New model metadata including buildability
+  buildability?: BuildabilityMetadata; // Direct buildability access
 }
 
 /**

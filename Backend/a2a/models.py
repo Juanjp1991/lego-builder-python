@@ -9,6 +9,9 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
+# Import buildability types from validation module (single source of truth)
+from validation.buildability import BrickPlacement, BuildabilityResult
+
 
 def to_camel(string: str) -> str:
     return "".join(word.capitalize() if i > 0 else word for i, word in enumerate(string.split("_")))
@@ -121,6 +124,54 @@ class Brick(A2ABaseModel):
     count: int = 1
 
 
+# Model size options for generation
+class ModelSizeEnum(str, Enum):
+    """Model size tiers for LEGO generation."""
+    TINY = "tiny"       # 15-30 bricks, 1-8 layers
+    SMALL = "small"     # 30-60 bricks, 2-10 layers (default)
+    MEDIUM = "medium"   # 60-120 bricks, 4-13 layers
+    LARGE = "large"     # 120-200 bricks, 6-17 layers
+    EPIC = "epic"       # 200-350 bricks, 10-23 layers
+    CUSTOM = "custom"   # User-defined
+
+
+class CustomSizeOptions(A2ABaseModel):
+    """Custom size settings for user-defined model complexity."""
+    min_bricks: int = Field(ge=10, description="Minimum number of bricks (>= 10)")
+    max_bricks: int = Field(le=1000, description="Maximum number of bricks (<= 1000)")
+    min_layers: int = Field(ge=1, description="Minimum number of layers (>= 1)")
+    max_layers: int = Field(le=50, description="Maximum number of layers (<= 50)")
+
+
+class GenerateOptions(A2ABaseModel):
+    """Options for controlling LEGO model generation."""
+    model_size: ModelSizeEnum = ModelSizeEnum.SMALL
+    custom_settings: Optional[CustomSizeOptions] = None
+    complexity: str = "normal"  # 'simple' | 'normal' from Story 2.5
+
+
+# Note: BrickPlacement and BuildabilityResult are imported from validation.buildability
+# to maintain a single source of truth for these dataclasses
+
+
+class BuildabilityMetadata(A2ABaseModel):
+    """Buildability metadata included in generation response."""
+    score: int = Field(ge=0, le=100, description="Buildability score (0-100)")
+    valid: bool = Field(description="Whether the model passes buildability validation")
+    layer_count: int = Field(ge=0, description="Number of layers in the model")
+    issues: List[str] = Field(default_factory=list, description="List of buildability issues found")
+    recommendations: List[str] = Field(default_factory=list, description="Recommendations for improving buildability")
+    estimated_build_time_minutes: int = Field(ge=0, description="Estimated time to build in minutes")
+    build_sequence: List[Dict[str, Any]] = Field(default_factory=list, description="Ordered brick placement sequence")
+
+
+class ModelMetadata(A2ABaseModel):
+    """Metadata about the generated model."""
+    brick_count: int = Field(ge=0, description="Total number of bricks")
+    dimensions: Optional[Dict[str, float]] = Field(default=None, description="Model dimensions in mm")
+    buildability: Optional[BuildabilityMetadata] = Field(default=None, description="Buildability validation result")
+
+
 # Modification request data
 class ModificationData(A2ABaseModel):
     """Data required for modifying an existing LEGO model."""
@@ -143,11 +194,13 @@ class SendMessageRequest(A2ABaseModel):
         configuration (Optional[SendMessageConfiguration]): Optional configuration.
         message_type (MessageType): Type of request (generation or modification).
         modification_data (Optional[ModificationData]): Required for modification requests.
+        generation_options (Optional[GenerateOptions]): Options for model generation (size, complexity).
     """
     message: Message
     configuration: Optional[SendMessageConfiguration] = None
     message_type: MessageType = MessageType.TEXT_TO_LEGO
     modification_data: Optional[ModificationData] = None
+    generation_options: Optional[GenerateOptions] = None
 
 # Agent Card
 class AgentCard(A2ABaseModel):

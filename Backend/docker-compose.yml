@@ -1,7 +1,7 @@
 services:
   forma-ai-frontend:
     build:
-      context: https://github.com/andreyka/forma-ai-frontend.git#main
+      context: ../Frontend
       dockerfile: Dockerfile
     ports:
       - "3000:3000"

@@ -78,7 +78,10 @@ export function GenerationResult({
         <CardContent className="space-y-4">
           {/* 3D Model Viewer */}
           <div className="relative aspect-square bg-muted rounded-lg overflow-hidden">
-            <ModelViewer modelUrl={model.modelUrl} />
+            <ModelViewer
+              modelUrl={model.modelUrl}
+              buildSequence={model.buildability?.buildSequence}
+            />
           </div>
 
           {/* Model Metadata */}

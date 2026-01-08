@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { GeneratedModel } from "@/lib/types";
+import type { GeneratedModel, ModelSize } from "@/lib/types";
 
 /**
  * Generation mode type - text or image.
@@ -36,6 +36,7 @@ interface GenerationState {
   status: GenerationStatus;
   stage: GenerationStage;
   mode: GenerationMode;
+  modelSize: ModelSize;
 
   // Current generation
   prompt: string;
@@ -56,6 +57,7 @@ interface GenerationState {
 
   // Actions
   setMode: (mode: GenerationMode) => void;
+  setModelSize: (size: ModelSize) => void;
   startGeneration: (prompt: string, images?: File[]) => void;
   setStage: (stage: GenerationStage) => void;
   setTaskId: (taskId: string) => void;
@@ -128,6 +130,7 @@ const initialState = {
   error: null,
   retryCount: 0,
   maxRetries: 3,
+  modelSize: "small" as ModelSize,
 };
 
 /**
@@ -141,6 +144,10 @@ export const useGenerationStore = create<GenerationState>()(
 
       setMode: (mode: GenerationMode): void => {
         set({ mode });
+      },
+
+      setModelSize: (modelSize: ModelSize): void => {
+        set({ modelSize });
       },
 
       startGeneration: (prompt: string, images: File[] = []): void => {
@@ -218,6 +225,7 @@ export const useGenerationStore = create<GenerationState>()(
         model: state.model,
         prompt: state.prompt,
         mode: state.mode,
+        modelSize: state.modelSize,
       }),
     }
   )

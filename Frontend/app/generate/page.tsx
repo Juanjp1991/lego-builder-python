@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { PromptInput, GenerationProgress, GenerationResult, GenerationErrorBoundary, ModeToggle, ImageUpload } from "@/components/generate";
+import { PromptInput, GenerationProgress, GenerationResult, GenerationErrorBoundary, ModeToggle, ImageUpload, SizeSelector } from "@/components/generate";
 import { FirstBuildBadge } from "@/components/generate/first-build-badge";
 import { AdvancedModeToggle } from "@/components/generate/advanced-mode-toggle";
 import { ModificationModal } from "@/components/generate/modification-modal";
@@ -58,6 +58,8 @@ export default function GeneratePage(): React.JSX.Element {
     failGeneration,
     reset,
     incrementRetry,
+    modelSize,
+    setModelSize,
   } = useGenerationStore();
 
   // First-Build Guarantee state (AC #1, #5)
@@ -222,6 +224,7 @@ export default function GeneratePage(): React.JSX.Element {
         const result = await Promise.race([
           generateLegoModel(mode, promptText, imageFiles, [], {
             complexity,
+            modelSize,
           }),
           timeoutPromise,
         ]);
@@ -399,6 +402,26 @@ export default function GeneratePage(): React.JSX.Element {
                       isFirstBuild={isFirstBuild}
                     />
                   )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Size Selector - visible when idle or failed (Story 2.5.1) */}
+            <AnimatePresence mode="wait">
+              {(status === "idle" || isFailed) && (
+                <motion.div
+                  key="size-selector"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                  className="mb-6"
+                >
+                  <SizeSelector
+                    selectedSize={modelSize}
+                    onSizeChange={setModelSize}
+                    disabled={isGenerating}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>

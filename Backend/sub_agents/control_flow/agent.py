@@ -5,7 +5,8 @@ between the Designer and Coder agents to generate and modify 3D models.
 """
 
 import re
-from typing import AsyncGenerator
+import json
+from typing import AsyncGenerator, Optional, Dict, Any
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
@@ -16,8 +17,13 @@ from sub_agents.designer.agent import get_designer_agent
 from sub_agents.coder.agent import get_coder_agent, CodeModifier
 from tools.renderer import render_stl
 from tools.cad_tools import create_cad_model
+from validation.buildability import validate_buildability, BuildabilityResult
+from a2a.models import GenerateOptions
 
 logger = logging.getLogger(__name__)
+
+# Minimum buildability score threshold for auto-correction
+BUILDABILITY_THRESHOLD = 70
 
 class ControlFlowAgent:
     """Orchestrates the multi-agent workflow for 3D model generation and modification.
@@ -46,6 +52,9 @@ class ControlFlowAgent:
         self.designer_agent = get_designer_agent()
         self.coder_agent = get_coder_agent()
         self.code_modifier = CodeModifier()
+
+        # Store latest buildability result for response inclusion
+        self._last_buildability_result: Optional[BuildabilityResult] = None
 
     async def _ensure_session(self, session_id: str, user_id: str) -> None:
         """Ensures a session exists for the user.
@@ -136,6 +145,134 @@ class ControlFlowAgent:
             if part.function_response:
                 return part.function_response.response
         return None
+
+    def _extract_model_metadata(self, coder_output: str) -> Dict[str, Any]:
+        """Extract model metadata (build_sequence, layers, etc.) from coder output.
+
+        The coder is instructed to output these variables in JSON format.
+
+        Args:
+            coder_output (str): The full text output from the Coder Agent.
+
+        Returns:
+            Dict containing build_sequence, layers, brick_count, layer_count
+        """
+        metadata = {
+            "build_sequence": [],
+            "layers": [],
+            "brick_count": 0,
+            "layer_count": 0
+        }
+
+        # Try to find JSON metadata in the output
+        # Look for patterns like build_sequence = [...] or metadata_json = {...}
+        json_patterns = [
+            r'build_sequence\s*=\s*(\[[\s\S]*?\])',
+            r'layers\s*=\s*(\[[\s\S]*?\])',
+            r'"build_sequence"\s*:\s*(\[[\s\S]*?\])',
+            r'metadata\s*=\s*(\{[\s\S]*?\})',
+        ]
+
+        for pattern in json_patterns:
+            match = re.search(pattern, coder_output)
+            if match:
+                try:
+                    # Try to parse as JSON (handle Python-style to JSON conversion)
+                    json_str = match.group(1).replace("'", '"').replace("True", "true").replace("False", "false")
+                    data = json.loads(json_str)
+
+                    if "build_sequence" in pattern:
+                        metadata["build_sequence"] = data
+                        metadata["brick_count"] = len(data)
+                    elif "layers" in pattern:
+                        metadata["layers"] = data
+                        metadata["layer_count"] = len(data)
+                    elif "metadata" in pattern and isinstance(data, dict):
+                        metadata.update(data)
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Failed to parse metadata JSON: {e}")
+
+        # Infer layer count from build_sequence if not set
+        if metadata["build_sequence"] and not metadata["layer_count"]:
+            z_positions = set()
+            for brick in metadata["build_sequence"]:
+                if isinstance(brick, dict) and "position" in brick:
+                    z = brick["position"].get("z", 0)
+                    layer = int(round(z / 9.6))  # LEGO brick height
+                    z_positions.add(layer)
+            metadata["layer_count"] = len(z_positions)
+
+        return metadata
+
+    def _validate_and_maybe_correct(
+        self,
+        model_data: Dict[str, Any],
+        coder_output: str,
+        original_spec: str
+    ) -> tuple[BuildabilityResult, bool]:
+        """Validate buildability and determine if self-correction is needed.
+
+        Args:
+            model_data: The extracted model metadata
+            coder_output: The raw coder output
+            original_spec: The original design specification
+
+        Returns:
+            Tuple of (BuildabilityResult, needs_correction: bool)
+        """
+        result = validate_buildability(model_data)
+        self._last_buildability_result = result
+
+        logger.info(f"Buildability validation: score={result.score}, valid={result.valid}, "
+                   f"issues={len(result.issues)}")
+
+        needs_correction = result.score < BUILDABILITY_THRESHOLD
+        return result, needs_correction
+
+    def _build_correction_prompt(
+        self,
+        original_spec: str,
+        validation_result: BuildabilityResult
+    ) -> str:
+        """Build a prompt for the coder to correct buildability issues.
+
+        Args:
+            original_spec: The original design specification
+            validation_result: The buildability validation result
+
+        Returns:
+            A prompt string for the coder to fix the issues
+        """
+        issues_text = "\n".join(f"- {issue}" for issue in validation_result.issues)
+        recommendations_text = "\n".join(f"- {rec}" for rec in validation_result.recommendations)
+
+        return f"""Original Specification:
+{original_spec}
+
+BUILDABILITY VALIDATION FAILED (Score: {validation_result.score}/100)
+
+Issues Found:
+{issues_text if issues_text else "- No specific issues"}
+
+Recommendations:
+{recommendations_text if recommendations_text else "- No specific recommendations"}
+
+Please fix the code to address these structural issues while maintaining the original design intent.
+Ensure all bricks are:
+1. On 8mm X/Y grid
+2. At correct Z-axis heights (9.6mm per layer)
+3. Using only standard brick sizes (2x2, 2x4, 2x6, 1x2, 1x4, 1x6)
+4. Connected to structure below OR above
+5. Staggered to avoid long vertical seams
+"""
+
+    def get_last_buildability_result(self) -> Optional[BuildabilityResult]:
+        """Get the most recent buildability validation result.
+
+        Returns:
+            The last BuildabilityResult, or None if no validation has been run.
+        """
+        return self._last_buildability_result
 
     def _extract_or_generate_stl(self, coder_output: str) -> tuple[str | None, str | None]:
         """Extracts STL path from output or attempts fallback generation.
@@ -237,7 +374,14 @@ class ControlFlowAgent:
         is_approved = "APPROVED" in feedback_output
         return is_approved, feedback_output, png_path
 
-    async def _execute_loop_iteration(self, current_spec: str, original_spec: str, user_id: str, session_id: str) -> AsyncGenerator[str | tuple[bool, str], None]:
+    async def _execute_loop_iteration(
+        self,
+        current_spec: str,
+        original_spec: str,
+        user_id: str,
+        session_id: str,
+        skip_buildability_correction: bool = False
+    ) -> AsyncGenerator[str | tuple[bool, str], None]:
         """Executes one iteration of the feedback loop.
 
         Args:
@@ -245,22 +389,23 @@ class ControlFlowAgent:
             original_spec (str): The original specification for reference.
             user_id (str): The unique identifier for the user.
             session_id (str): The unique identifier for the session.
+            skip_buildability_correction (bool): If True, skip auto-correction for buildability.
 
         Yields:
             Union[str, tuple[bool, str]]: Chunks of text output, and finally a tuple (is_approved, next_spec).
         """
         # 1. Generate Model
-        # Note: We can't easily stream the coder output here if we refactor to _generate_model 
+        # Note: We can't easily stream the coder output here if we refactor to _generate_model
         # unless we pass the yield callback or keep the generator logic inline.
         # To preserve streaming, we'll keep the generator call here but use the helper logic for the rest.
-        
+
         coder_result = {}
         async for chunk in self._run_coder_step(current_spec, user_id, session_id, coder_result):
             yield chunk
-            
+
         coder_output = coder_result.get("output", "")
         stl_path, generation_error = self._extract_or_generate_stl(coder_output)
-        
+
         if not stl_path:
             logger.error(f"ControlFlow: Generation failed. Error: {generation_error}")
             logger.info("ControlFlow: Sending error back to Coder...")
@@ -268,9 +413,50 @@ class ControlFlowAgent:
             yield (False, next_spec)
             return
 
-        # 2. Verify Model
+        # 2. Validate Buildability (if metadata available)
+        model_metadata = self._extract_model_metadata(coder_output)
+        if model_metadata.get("build_sequence") and not skip_buildability_correction:
+            validation_result, needs_correction = self._validate_and_maybe_correct(
+                model_metadata, coder_output, original_spec
+            )
+
+            if needs_correction:
+                logger.info(f"ControlFlow: Buildability score {validation_result.score} < {BUILDABILITY_THRESHOLD}, "
+                           f"attempting self-correction")
+                yield f"Buildability check: score {validation_result.score}/100 - attempting correction...\n"
+
+                # Build correction prompt and retry (does NOT count against user retry limit)
+                correction_spec = self._build_correction_prompt(original_spec, validation_result)
+
+                # Run coder again with correction prompt
+                correction_result = {}
+                async for chunk in self._run_coder_step(correction_spec, user_id, session_id, correction_result):
+                    pass  # Don't yield correction output to avoid confusion
+
+                corrected_output = correction_result.get("output", "")
+                corrected_stl, corrected_error = self._extract_or_generate_stl(corrected_output)
+
+                if corrected_stl:
+                    stl_path = corrected_stl
+                    coder_output = corrected_output
+
+                    # Re-validate corrected model
+                    corrected_metadata = self._extract_model_metadata(corrected_output)
+                    if corrected_metadata.get("build_sequence"):
+                        corrected_validation = validate_buildability(corrected_metadata)
+                        self._last_buildability_result = corrected_validation
+                        logger.info(f"ControlFlow: Corrected buildability score: {corrected_validation.score}")
+                        yield f"Corrected buildability score: {corrected_validation.score}/100\n"
+                else:
+                    logger.warning(f"ControlFlow: Self-correction failed, using original model")
+                    yield "Self-correction failed, using original model.\n"
+        else:
+            # No build_sequence metadata - set a default result
+            self._last_buildability_result = None
+
+        # 3. Verify Model with Designer
         is_approved, feedback_output, png_path = await self._verify_model(stl_path, original_spec, user_id, session_id)
-        
+
         if png_path:
             yield f"Generated Image: {png_path}\n"
         else:
@@ -291,21 +477,43 @@ class ControlFlowAgent:
             next_spec = f"Original Specification:\n{original_spec}\n\nFeedback on previous attempt:\n{feedback_output}\n\nPlease fix the code based on this feedback."
             yield (False, next_spec)
 
-    async def run(self, prompt: str, session_id: str, user_id: str = "user") -> AsyncGenerator[str, None]:
+    async def run(
+        self, 
+        prompt: str, 
+        session_id: str, 
+        user_id: str = "user",
+        generation_options: GenerateOptions | None = None
+    ) -> AsyncGenerator[str, None]:
         """Executes the agent workflow: Designer -> Coder -> Renderer -> Designer (Feedback) -> Coder (Fix).
 
         Args:
             prompt (str): The user's request.
             session_id (str): The unique identifier for the session.
             user_id (str): The unique identifier for the user.
+            generation_options (GenerateOptions | None): Optional generation options.
 
         Yields:
             str: Chunks of text output describing the process and results.
         """
         await self._ensure_session(session_id, user_id)
 
+        # Inject complexity/size context into the prompt
+        context_header = ""
+        if generation_options:
+            complexity = generation_options.complexity or "normal"
+            model_size = generation_options.model_size or "small"
+            context_header = f"""[GENERATION CONTEXT]
+Complexity: {complexity.upper()}
+Model Size: {str(model_size).upper() if model_size else 'STANDARD'}
+IMPORTANT: Even in NORMAL/ADVANCED mode, the output MUST be a LEGO brick-based model with voxel aesthetic.
+Advanced mode means MORE LEGO detail and precision, NOT smooth CAD surfaces.
+---
+
+"""
+        enhanced_prompt = context_header + prompt
+
         # Run Designer Agent first to build the initial task / specification. 
-        designer_output = await self._run_designer_step(prompt, user_id, session_id)
+        designer_output = await self._run_designer_step(enhanced_prompt, user_id, session_id)
         yield f"Design Specification:\n{designer_output[:100]}...\n"
 
         # After design specification is generated, run the loops of coder -> renderer -> designer -> coder until approved or max loops reached.
