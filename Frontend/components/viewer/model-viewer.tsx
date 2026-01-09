@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { Canvas, useLoader } from "@react-three/fiber";
 import { OrbitControls, Bounds, Center, useBounds } from "@react-three/drei";
-import { STLLoader } from "three-stdlib";
+import { STLLoader, OBJLoader } from "three-stdlib";
 import * as THREE from "three";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -148,6 +148,41 @@ function FPSCounter(): React.JSX.Element | null {
 }
 
 // ============================================================================
+// OBJ Model Component (renders colored OBJ files inside Canvas)
+// ============================================================================
+
+interface OBJModelProps {
+  url: string;
+}
+
+function OBJModel({ url }: OBJModelProps): React.JSX.Element {
+  const obj = useLoader(OBJLoader, url);
+  const bounds = useBounds();
+
+  // Center the model
+  const centeredObj = useMemo(() => {
+    const cloned = obj.clone();
+    const box = new THREE.Box3().setFromObject(cloned);
+    const center = box.getCenter(new THREE.Vector3());
+    cloned.position.sub(center);
+    return cloned;
+  }, [obj]);
+
+  // Auto-frame model on load
+  useEffect(() => {
+    if (centeredObj && bounds) {
+      const timeout = setTimeout(() => {
+        bounds.refresh().fit().clip();
+      }, 100);
+      return (): void => clearTimeout(timeout);
+    }
+    return undefined;
+  }, [centeredObj, bounds]);
+
+  return <primitive object={centeredObj} />;
+}
+
+// ============================================================================
 // STL Model Component (renders inside Canvas)
 // ============================================================================
 
@@ -157,6 +192,15 @@ interface STLModelProps {
 }
 
 function STLModel({ url, color = "#0066CC" }: STLModelProps): React.JSX.Element {
+  // Determine if this is an OBJ file (colored) or STL (single color)
+  const isOBJ = url.toLowerCase().endsWith('.obj');
+
+  // For OBJ files, use OBJLoader
+  if (isOBJ) {
+    return <OBJModel url={url} />;
+  }
+
+  // For STL files, use existing logic
   const { centeredGeometry } = useSTLModel(url);
   const bounds = useBounds();
 

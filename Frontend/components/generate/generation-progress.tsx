@@ -3,18 +3,20 @@
 /**
  * Progress storytelling UI component for LEGO model generation.
  * Displays animated progress stages: "Imagining..." → "Finding..." → "Building..."
+ * Now includes a toggleable logs panel for debugging.
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
 import {
   useGenerationStore,
   getStageMessages,
   STAGE_PROGRESS,
   type GenerationStage,
 } from "@/lib/stores/useGenerationStore";
-import { Loader2, Lightbulb, Search, Hammer, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, Lightbulb, Search, Hammer, CheckCircle2, XCircle, ChevronDown, ChevronUp, Terminal } from "lucide-react";
 
 /**
  * Icons for each generation stage.
@@ -35,8 +37,9 @@ interface GenerationProgressProps {
 export function GenerationProgress({
   onStageChange,
 }: GenerationProgressProps): React.JSX.Element {
-  const { stage, mode, elapsedTime, updateElapsedTime, error } = useGenerationStore();
+  const { stage, mode, elapsedTime, updateElapsedTime, error, logs, showLogs, toggleShowLogs } = useGenerationStore();
   const stageMessages = getStageMessages(mode);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Update elapsed time every second
   useEffect(() => {
@@ -53,6 +56,13 @@ export function GenerationProgress({
   useEffect(() => {
     onStageChange?.(stage);
   }, [stage, onStageChange]);
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs, showLogs]);
 
   const progress = STAGE_PROGRESS[stage];
   const message = stageMessages[stage];
@@ -136,16 +146,56 @@ export function GenerationProgress({
           (s) => (
             <div
               key={s}
-              className={`w-2 h-2 rounded-full transition-colors ${
-                STAGE_PROGRESS[s] <= progress
+              className={`w-2 h-2 rounded-full transition-colors ${STAGE_PROGRESS[s] <= progress
                   ? "bg-primary"
                   : "bg-muted"
-              }`}
+                }`}
               aria-hidden="true"
             />
           )
         )}
       </div>
+
+      {/* Logs toggle button */}
+      <div className="flex justify-center">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={toggleShowLogs}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Terminal className="size-4 mr-2" />
+          {showLogs ? "Hide Logs" : "Show Logs"}
+          {showLogs ? <ChevronUp className="size-4 ml-1" /> : <ChevronDown className="size-4 ml-1" />}
+        </Button>
+      </div>
+
+      {/* Logs panel */}
+      <AnimatePresence>
+        {showLogs && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="bg-muted/50 rounded-lg border overflow-hidden"
+          >
+            <div className="p-3 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
+              {logs.length === 0 ? (
+                <p className="text-muted-foreground italic">Waiting for logs...</p>
+              ) : (
+                logs.map((log, i) => (
+                  <div key={i} className="text-muted-foreground whitespace-pre-wrap break-all">
+                    {log}
+                  </div>
+                ))
+              )}
+              <div ref={logsEndRef} />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
+

@@ -6,24 +6,29 @@ between the Designer and Coder agents to generate and modify 3D models.
 
 import re
 import json
-from typing import AsyncGenerator, Optional, Dict, Any
+import asyncio
+from typing import AsyncGenerator, Optional, Dict, Any, List
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.genai.types import Content, Part
 
 import logging
-from sub_agents.designer.agent import get_designer_agent
+from sub_agents.designer.agent import get_designer_agent, get_designer_verification_agent
 from sub_agents.coder.agent import get_coder_agent, CodeModifier
-from tools.renderer import render_stl
+from tools.renderer import render_stl, render_stl_async
 from tools.cad_tools import create_cad_model
-from validation.buildability import validate_buildability, BuildabilityResult
+from validation.buildability import validate_buildability, BuildabilityResult, BrickPlacement
 from a2a.models import GenerateOptions
+from utils.timing import TimingCollector, get_timing_collector, reset_timing_collector
 
 logger = logging.getLogger(__name__)
 
 # Minimum buildability score threshold for auto-correction
 BUILDABILITY_THRESHOLD = 70
+
+# High buildability threshold to skip Designer verification
+HIGH_BUILDABILITY_SKIP_THRESHOLD = 90
 
 class ControlFlowAgent:
     """Orchestrates the multi-agent workflow for 3D model generation and modification.
@@ -50,11 +55,15 @@ class ControlFlowAgent:
 
         # Initialize sub-agents
         self.designer_agent = get_designer_agent()
+        self.designer_verification_agent = get_designer_verification_agent()  # Lighter Flash model
         self.coder_agent = get_coder_agent()
         self.code_modifier = CodeModifier()
 
         # Store latest buildability result for response inclusion
         self._last_buildability_result: Optional[BuildabilityResult] = None
+        
+        # Timing collector for current request
+        self._timing: Optional[TimingCollector] = None
 
     async def _ensure_session(self, session_id: str, user_id: str) -> None:
         """Ensures a session exists for the user.
@@ -145,6 +154,77 @@ class ControlFlowAgent:
             if part.function_response:
                 return part.function_response.response
         return None
+
+    def _generate_synthetic_build_sequence(self, prompt: str) -> List[BrickPlacement]:
+        """Generate a synthetic colored build_sequence based on the prompt.
+        
+        This is a fallback when the Coder agent doesn't output build_sequence metadata.
+        It creates a simple brick layout with colors derived from prompt keywords.
+        
+        Args:
+            prompt: The original user/design prompt
+            
+        Returns:
+            List of BrickPlacement objects with colors
+        """
+        prompt_lower = prompt.lower()
+        
+        # Determine primary and secondary colors based on prompt keywords
+        if any(word in prompt_lower for word in ["tree", "plant", "forest", "leaf"]):
+            colors = ["green", "brown", "green", "green", "brown"]
+        elif any(word in prompt_lower for word in ["bear", "teddy", "animal"]):
+            colors = ["brown", "tan", "brown", "black", "brown"]
+        elif any(word in prompt_lower for word in ["car", "vehicle", "truck"]):
+            colors = ["red", "black", "gray", "red", "black"]
+        elif any(word in prompt_lower for word in ["plane", "airplane", "aircraft"]):
+            colors = ["white", "blue", "white", "gray", "blue"]
+        elif any(word in prompt_lower for word in ["house", "building", "home"]):
+            colors = ["red", "white", "red", "gray", "brown"]
+        elif any(word in prompt_lower for word in ["robot", "machine"]):
+            colors = ["gray", "blue", "gray", "black", "yellow"]
+        else:
+            # Default colorful pattern
+            colors = ["red", "blue", "yellow", "green", "white"]
+        
+        # Generate a simple 3-layer brick structure
+        bricks = []
+        step = 1
+        
+        # Layer 1 (base) - 2x4 bricks
+        for x in range(0, 32, 16):
+            for y in range(0, 32, 8):
+                bricks.append(BrickPlacement(
+                    step=step,
+                    brick="2x4",
+                    color=colors[step % len(colors)],
+                    position={"x": float(x), "y": float(y), "z": 0.0}
+                ))
+                step += 1
+        
+        # Layer 2 (middle) - staggered 2x4
+        for x in range(8, 24, 16):
+            for y in range(0, 32, 8):
+                bricks.append(BrickPlacement(
+                    step=step,
+                    brick="2x4",
+                    color=colors[step % len(colors)],
+                    position={"x": float(x), "y": float(y), "z": 9.6}
+                ))
+                step += 1
+        
+        # Layer 3 (top) - 2x2 accent bricks
+        for x in range(0, 32, 16):
+            for y in range(8, 24, 16):
+                bricks.append(BrickPlacement(
+                    step=step,
+                    brick="2x2",
+                    color=colors[(step + 1) % len(colors)],
+                    position={"x": float(x), "y": float(y), "z": 19.2}
+                ))
+                step += 1
+        
+        logger.info(f"ControlFlow: Generated {len(bricks)} synthetic bricks with colors based on prompt")
+        return bricks
 
     def _extract_model_metadata(self, coder_output: str) -> Dict[str, Any]:
         """Extract model metadata (build_sequence, layers, etc.) from coder output.
@@ -308,7 +388,9 @@ Ensure all bricks are:
         return None, "No code block or STL file found."
 
     async def _get_designer_feedback(self, png_path: str, original_spec: str, user_id: str, session_id: str) -> str:
-        """Requests feedback from the Designer Agent on the rendered image.
+        """Requests feedback from the Designer Verification Agent on the rendered image.
+
+        Uses the Flash model for faster verification feedback loops.
 
         Args:
             png_path (str): Path to the rendered PNG image.
@@ -317,11 +399,12 @@ Ensure all bricks are:
             session_id (str): The unique identifier for the session.
 
         Returns:
-            str: The feedback text from the Designer Agent.
+            str: The feedback text from the Designer Verification Agent.
         """
-        logger.info("--- Requesting Designer Feedback ---")
+        logger.info("--- Requesting Designer Verification (Flash) ---")
+        # Use the lightweight verification agent (Flash model) for speed
         designer_runner = Runner(
-            agent=self.designer_agent,
+            agent=self.designer_verification_agent,
             app_name=self.app_name,
             session_service=self.session_service,
             memory_service=self.memory_service
@@ -330,7 +413,10 @@ Ensure all bricks are:
         with open(png_path, "rb") as f:
             image_data = f.read()
             
-        feedback_prompt = "Here is the rendered image of the generated model. Compare it against the original specification. If it is correct, reply with 'APPROVED' followed by a friendly message to the user describing the model and any nuances (e.g. 'Here is your 3d model...'). If it is incorrect, describe what is wrong so the coder can fix it."
+        feedback_prompt = f"""Original Specification:
+{original_spec[:1000]}...
+
+Compare this rendered image against the specification above."""
         
         feedback_input = Content(parts=[
             Part(text=feedback_prompt),
@@ -341,34 +427,47 @@ Ensure all bricks are:
         async for event in designer_runner.run_async(user_id=user_id, session_id=session_id, new_message=feedback_input):
             if event.is_final_response() and event.content and event.content.parts:
                 feedback_output = event.content.parts[0].text
-                logger.info(f"ControlFlow: Designer Feedback:\n{feedback_output}")
+                logger.info(f"ControlFlow: Designer Verification Feedback:\n{feedback_output}")
         
         return feedback_output
 
 
-    async def _verify_model(self, stl_path: str, original_spec: str, user_id: str, session_id: str) -> tuple[bool, str, str | None]:
-        """Renders the model and gets feedback from the Designer.
+    async def _verify_model(
+        self,
+        stl_path: str,
+        original_spec: str,
+        user_id: str,
+        session_id: str,
+        skip_verification: bool = False
+    ) -> tuple[bool, str, str | None]:
+        """Renders the model and optionally gets feedback from the Designer.
 
         Args:
             stl_path: Path to the STL file.
             original_spec: The original specification.
             user_id: User ID.
             session_id: Session ID.
+            skip_verification: If True, skip Designer feedback (for high buildability scores).
 
         Returns:
             tuple: (is_approved, feedback_text, png_path)
         """
         logger.info(f"ControlFlow: Found STL at {stl_path}")
         
-        # Render STL
-        png_path = render_stl(stl_path)
+        # Use async rendering for better performance
+        png_path = await render_stl_async(stl_path)
         if not png_path:
             logger.error("ControlFlow: Failed to render STL.")
             return False, "Failed to render STL.", None
             
         logger.info(f"ControlFlow: Rendered image at {png_path}")
         
-        # Ask Designer for Feedback
+        # Skip Designer verification if buildability score is high
+        if skip_verification:
+            logger.info("ControlFlow: Skipping Designer verification (high buildability score)")
+            return True, "APPROVED: Model passed buildability validation with high score.", png_path
+        
+        # Ask Designer for Feedback (using Flash model)
         feedback_output = await self._get_designer_feedback(png_path, original_spec, user_id, session_id)
         
         is_approved = "APPROVED" in feedback_output
@@ -415,6 +514,8 @@ Ensure all bricks are:
 
         # 2. Validate Buildability (if metadata available)
         model_metadata = self._extract_model_metadata(coder_output)
+        skip_designer_verification = False  # Track if we should skip verification
+        
         if model_metadata.get("build_sequence") and not skip_buildability_correction:
             validation_result, needs_correction = self._validate_and_maybe_correct(
                 model_metadata, coder_output, original_spec
@@ -447,15 +548,30 @@ Ensure all bricks are:
                         self._last_buildability_result = corrected_validation
                         logger.info(f"ControlFlow: Corrected buildability score: {corrected_validation.score}")
                         yield f"Corrected buildability score: {corrected_validation.score}/100\n"
+                        
+                        # Check if corrected score is high enough to skip verification
+                        if corrected_validation.score >= HIGH_BUILDABILITY_SKIP_THRESHOLD:
+                            skip_designer_verification = True
+                            logger.info(f"ControlFlow: High buildability score {corrected_validation.score} >= {HIGH_BUILDABILITY_SKIP_THRESHOLD}, will skip Designer verification")
                 else:
                     logger.warning(f"ControlFlow: Self-correction failed, using original model")
                     yield "Self-correction failed, using original model.\n"
+            else:
+                # Buildability validation passed - check if score is high enough to skip verification
+                if validation_result.score >= HIGH_BUILDABILITY_SKIP_THRESHOLD:
+                    skip_designer_verification = True
+                    logger.info(f"ControlFlow: High buildability score {validation_result.score} >= {HIGH_BUILDABILITY_SKIP_THRESHOLD}, will skip Designer verification")
         else:
-            # No build_sequence metadata - set a default result
+            # No build_sequence metadata from coder - use STL rendering instead
+            # Synthetic colored brick rendering is disabled until Coder reliably outputs build_sequence
+            logger.info("ControlFlow: No build_sequence from coder, using STL rendering")
             self._last_buildability_result = None
 
-        # 3. Verify Model with Designer
-        is_approved, feedback_output, png_path = await self._verify_model(stl_path, original_spec, user_id, session_id)
+        # 3. Verify Model with Designer (may be skipped for high buildability scores)
+        is_approved, feedback_output, png_path = await self._verify_model(
+            stl_path, original_spec, user_id, session_id, 
+            skip_verification=skip_designer_verification
+        )
 
         if png_path:
             yield f"Generated Image: {png_path}\n"
@@ -634,10 +750,29 @@ Advanced mode means MORE LEGO detail and precision, NOT smooth CAD surfaces.
             yield (False, f"Modification failed: {generation_error}")
             return
 
-        # 2. Verify Modified Model
+        # 2. Validate Buildability (if metadata available) - same as generation workflow
+        model_metadata = self._extract_model_metadata(modifier_output)
+        skip_designer_verification = False
+
+        if model_metadata.get("build_sequence"):
+            validation_result = validate_buildability(model_metadata)
+            self._last_buildability_result = validation_result
+            logger.info(f"ControlFlow: Modification buildability score: {validation_result.score}")
+            
+            # Check if score is high enough to skip Designer verification
+            if validation_result.score >= HIGH_BUILDABILITY_SKIP_THRESHOLD:
+                skip_designer_verification = True
+                logger.info(f"ControlFlow: High buildability score {validation_result.score} >= "
+                           f"{HIGH_BUILDABILITY_SKIP_THRESHOLD}, skipping Designer verification")
+        else:
+            logger.info("ControlFlow: No build_sequence from modifier, using STL rendering only")
+            self._last_buildability_result = None
+
+        # 3. Verify Modified Model (may be skipped for high buildability)
         is_approved, feedback_output, png_path = await self._verify_model(
             stl_path, f"Modified version of existing model: {modification_prompt}",
-            user_id, session_id
+            user_id, session_id,
+            skip_verification=skip_designer_verification
         )
 
         if png_path:

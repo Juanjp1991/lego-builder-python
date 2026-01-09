@@ -23,9 +23,9 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 
 /**
  * Generation timeout in milliseconds.
- * Set to 300s (5 minutes) as backend CAD generation can take 60-90+ seconds for complex models.
+ * Set to 600s (10 minutes) as backend CAD generation can take longer for complex models.
  */
-const GENERATION_TIMEOUT_MS = 300000;
+const GENERATION_TIMEOUT_MS = 600000;
 
 /**
  * Stage progression delays for storytelling UI.
@@ -60,6 +60,8 @@ export default function GeneratePage(): React.JSX.Element {
     incrementRetry,
     modelSize,
     setModelSize,
+    addLog,
+    clearLogs,
   } = useGenerationStore();
 
   // First-Build Guarantee state (AC #1, #5)
@@ -206,6 +208,9 @@ export default function GeneratePage(): React.JSX.Element {
 
       // Start generation UI
       startGeneration(promptText, imageFiles);
+      clearLogs();
+      addLog(`Starting ${mode} generation...`);
+      addLog(`Prompt: ${promptText.slice(0, 50)}${promptText.length > 50 ? '...' : ''}`);
 
       // Set up timeout (NFR1: <60 seconds)
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -219,6 +224,8 @@ export default function GeneratePage(): React.JSX.Element {
         // Use 'simple' for first-time users unless they override with Advanced Mode
         const shouldUseSimpleMode = isFirstBuild && !advancedModeEnabled;
         const complexity = shouldUseSimpleMode ? "simple" : "normal";
+        addLog(`Mode: ${complexity}, Size: ${modelSize}`);
+        addLog(`Sending request to backend...`);
 
         // Race between generation and timeout
         const result = await Promise.race([
@@ -232,8 +239,19 @@ export default function GeneratePage(): React.JSX.Element {
         // Clear timeout on success
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
+        addLog(`Generation complete!`);
+
+        // Log additional model info if available
+        if (result.brickCount) {
+          addLog(`Brick count: ${result.brickCount}`);
+        }
+        if (result.buildability?.score) {
+          addLog(`Buildability score: ${result.buildability.score}/100`);
+        }
+
         // Set task ID for tracking
         setTaskId(result.taskId);
+        addLog(`Task ID: ${result.taskId}`);
 
         // Complete generation
         completeGeneration(result);
@@ -246,10 +264,11 @@ export default function GeneratePage(): React.JSX.Element {
 
         const errorMessage =
           err instanceof Error ? err.message : "Failed to generate model";
+        addLog(`Error: ${errorMessage}`);
         failGeneration(errorMessage);
       }
     },
-    [mode, startGeneration, setStage, setTaskId, completeGeneration, failGeneration, cacheModel, lookupCache, isFirstBuild, advancedModeEnabled]
+    [mode, startGeneration, setStage, setTaskId, completeGeneration, failGeneration, cacheModel, lookupCache, isFirstBuild, advancedModeEnabled, addLog, clearLogs, modelSize]
   );
 
   /**

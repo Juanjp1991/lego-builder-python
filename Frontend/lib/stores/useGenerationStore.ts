@@ -55,6 +55,10 @@ interface GenerationState {
   retryCount: number;
   maxRetries: number;
 
+  // Logs panel
+  logs: string[];
+  showLogs: boolean;
+
   // Actions
   setMode: (mode: GenerationMode) => void;
   setModelSize: (size: ModelSize) => void;
@@ -66,6 +70,9 @@ interface GenerationState {
   failGeneration: (error: string) => void;
   reset: () => void;
   incrementRetry: () => boolean; // Returns true if retry is allowed
+  addLog: (log: string) => void;
+  toggleShowLogs: () => void;
+  clearLogs: () => void;
 }
 
 /**
@@ -131,6 +138,8 @@ const initialState = {
   retryCount: 0,
   maxRetries: 3,
   modelSize: "small" as ModelSize,
+  logs: [] as string[],
+  showLogs: false,
 };
 
 /**
@@ -216,6 +225,19 @@ export const useGenerationStore = create<GenerationState>()(
           return true;
         }
         return false;
+      },
+
+      addLog: (log: string): void => {
+        const timestamp = new Date().toLocaleTimeString();
+        set((state) => ({ logs: [...state.logs, `[${timestamp}] ${log}`] }));
+      },
+
+      toggleShowLogs: (): void => {
+        set((state) => ({ showLogs: !state.showLogs }));
+      },
+
+      clearLogs: (): void => {
+        set({ logs: [] });
       },
     }),
     {

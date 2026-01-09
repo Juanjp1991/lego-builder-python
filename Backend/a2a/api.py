@@ -17,7 +17,7 @@ from a2a.models import (
 from a2a.task_manager import TaskManager
 from runner import run_agent, run_modification_agent, control_flow_agent
 from config import settings
-from tools.cad_tools import task_id_var
+from tools.cad_tools import task_id_var, prompt_var
 from models.generation_options import MODEL_SIZE_SPECS, ModelSize
 
 logger = logging.getLogger(__name__)
@@ -36,15 +36,24 @@ def _find_generated_files(task_id: str, output_dir: str) -> list[Part]:
         list[Part]: A list of file parts found.
     """
     parts = []
+    obj_parts = []  # OBJ files go first (colored)
+    stl_parts = []  # STL files as fallback
+    
     if not os.path.exists(output_dir):
         return parts
 
     for filename in os.listdir(output_dir):
         if not filename.startswith(task_id):
             continue
-            
-        if filename.endswith(".stl"):
-            parts.append(Part(file=FilePart(
+        
+        if filename.endswith(".obj"):
+            obj_parts.append(Part(file=FilePart(
+                file_with_uri=f"/download/{filename}",
+                name=filename,
+                media_type="model/obj"
+            )))
+        elif filename.endswith(".stl"):
+            stl_parts.append(Part(file=FilePart(
                 file_with_uri=f"/download/{filename}",
                 name=filename,
                 media_type="model/stl"
@@ -55,7 +64,9 @@ def _find_generated_files(task_id: str, output_dir: str) -> list[Part]:
                 name=filename,
                 media_type="model/step"
             )))
-    return parts
+    
+    # OBJ first (colored), then STL (fallback), then others
+    return obj_parts + stl_parts + parts
 
 async def process_a2a_task(
     task_id: str,
@@ -79,7 +90,10 @@ async def process_a2a_task(
     task_manager.update_task_status(task_id, TaskState.WORKING)
 
     # Set the task ID in the context variable so tools can use it
-    token = task_id_var.set(task_id)
+    task_token = task_id_var.set(task_id)
+    
+    # Set the prompt in context variable for colored OBJ generation
+    prompt_token = prompt_var.set(prompt)
 
     try:
         final_response = ""

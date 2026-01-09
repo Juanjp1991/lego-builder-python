@@ -185,6 +185,8 @@ import type {
   TemplateList,
   StructuralAnalysis,
   StructuralIssue,
+  BuildabilityMetadata,
+  BrickPlacement,
 } from "@/lib/types";
 
 // ===============================================
@@ -241,6 +243,86 @@ function parseStructuralAnalysis(
       location: issue.location,
     })),
     recommendations: rawAnalysis.recommendations || [],
+  };
+}
+
+/**
+ * Raw buildability data from backend (snake_case).
+ */
+interface RawBuildability {
+  score?: number;
+  valid?: boolean;
+  layer_count?: number;
+  issues?: string[];
+  recommendations?: string[];
+  estimated_build_time_minutes?: number;
+  build_sequence?: Array<{
+    step: number;
+    brick: string;
+    color: string;
+    position: { x: number; y: number; z: number };
+  }>;
+}
+
+/**
+ * Parses buildability metadata from backend response (snake_case to camelCase).
+ * Returns undefined if no buildability data found.
+ */
+function parseBuildability(
+  metadata?: Record<string, unknown>,
+  artifactParts?: Part[]
+): BuildabilityMetadata | undefined {
+  // Try metadata first (primary source)
+  let raw: RawBuildability | undefined = metadata?.buildability as RawBuildability | undefined;
+
+  // Try artifact data parts if not in metadata
+  if (!raw && artifactParts) {
+    const dataPart = artifactParts.find(
+      (p) => p.data && (p.data as Record<string, unknown>).buildability
+    );
+    if (dataPart?.data) {
+      raw = (dataPart.data as Record<string, unknown>).buildability as RawBuildability;
+    }
+
+    // Also try build_sequence directly in data parts
+    if (!raw) {
+      const seqPart = artifactParts.find(
+        (p) => p.data && (p.data as Record<string, unknown>).build_sequence
+      );
+      if (seqPart?.data) {
+        const data = seqPart.data as Record<string, unknown>;
+        raw = {
+          score: data.score as number | undefined,
+          valid: data.valid as boolean | undefined,
+          layer_count: data.layer_count as number | undefined,
+          issues: data.issues as string[] | undefined,
+          recommendations: data.recommendations as string[] | undefined,
+          estimated_build_time_minutes: data.estimated_build_time_minutes as number | undefined,
+          build_sequence: data.build_sequence as RawBuildability["build_sequence"],
+        };
+      }
+    }
+  }
+
+  // If no raw data found, return undefined
+  if (!raw || !raw.build_sequence || raw.build_sequence.length === 0) {
+    return undefined;
+  }
+
+  // Convert snake_case to camelCase
+  return {
+    score: raw.score ?? 0,
+    valid: raw.valid ?? false,
+    layerCount: raw.layer_count ?? 0,
+    issues: raw.issues ?? [],
+    recommendations: raw.recommendations ?? [],
+    estimatedBuildTimeMinutes: raw.estimated_build_time_minutes ?? 0,
+    buildSequence: raw.build_sequence.map((b) => ({
+      step: b.step,
+      brick: b.brick,
+      color: b.color,
+      position: b.position,
+    })),
   };
 }
 
@@ -363,11 +445,18 @@ export async function generateLegoModel(
     completedTask.artifacts?.parts
   );
 
+  // Parse buildability metadata (for colored brick rendering)
+  const buildability = parseBuildability(
+    completedTask.metadata as Record<string, unknown> | undefined,
+    completedTask.artifacts?.parts
+  );
+
   return {
     taskId: completedTask.id,
     modelUrl,
     brickCount,
     structuralAnalysis,
+    buildability,
   };
 }
 

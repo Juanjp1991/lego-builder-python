@@ -3,6 +3,7 @@
 This module provides a function to render STL files to PNG images using PyVista.
 """
 
+import asyncio
 import os
 import pyvista as pv
 from typing import Optional
@@ -54,3 +55,16 @@ def render_stl(stl_path: str, output_path: Optional[str] = None) -> Optional[str
     except Exception as e:
         print(f"Error rendering STL: {e}")
         return None
+
+
+async def render_stl_async(stl_path: str, output_path: Optional[str] = None) -> Optional[str]:
+    """Async wrapper for render_stl that runs in a thread pool.
+
+    Args:
+        stl_path (str): Path to the STL file.
+        output_path (Optional[str]): Path to save the image.
+
+    Returns:
+        Optional[str]: The path to the generated image, or None if failed.
+    """
+    return await asyncio.to_thread(render_stl, stl_path, output_path)
